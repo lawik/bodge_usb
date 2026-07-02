@@ -174,15 +174,34 @@ defmodule CircuitsUsb.Shim do
 
   # ---- async engine primitives (B5) --------------------------------------
 
+  # USBDEVFS_URB_TYPE_* codes.
+  @urb_type_interrupt 1
+  @urb_type_bulk 3
+
   @doc """
-  Submit a bulk URB asynchronously (`USBDEVFS_SUBMITURB`). Returns immediately.
-  `tag` is a caller-chosen 64-bit id echoed back by `reap/1`. Direction is bit 7
-  of `endpoint`; IN takes a length, OUT takes iodata. The interface must be
-  claimed. Pair with `select/2` + `reap/1` to collect the completion.
+  Submit a URB asynchronously (`USBDEVFS_SUBMITURB`). Returns immediately.
+  `urb_type` is `USBDEVFS_URB_TYPE_BULK` (3) or `_INTERRUPT` (1). `tag` is a
+  caller-chosen 64-bit id echoed back by `reap/1`. Direction is bit 7 of
+  `endpoint`; IN takes a length, OUT takes iodata. The interface must be claimed.
+  Pair with `select/2` + `reap/1` to collect the completion. Prefer
+  `submit_bulk/4` and `submit_interrupt/4`.
   """
+  @spec submit_urb(handle(), non_neg_integer(), 1..3, 0..255, iodata() | non_neg_integer()) ::
+          :ok | {:error, atom()}
+  def submit_urb(_h, _tag, _urb_type, _endpoint, _data_or_length),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc "Submit a bulk URB. See `submit_urb/5`."
   @spec submit_bulk(handle(), non_neg_integer(), 0..255, iodata() | non_neg_integer()) ::
           :ok | {:error, atom()}
-  def submit_bulk(_h, _tag, _endpoint, _data_or_length), do: :erlang.nif_error(:nif_not_loaded)
+  def submit_bulk(h, tag, endpoint, data_or_length),
+    do: submit_urb(h, tag, @urb_type_bulk, endpoint, data_or_length)
+
+  @doc "Submit an interrupt URB. See `submit_urb/5`."
+  @spec submit_interrupt(handle(), non_neg_integer(), 0..255, iodata() | non_neg_integer()) ::
+          :ok | {:error, atom()}
+  def submit_interrupt(h, tag, endpoint, data_or_length),
+    do: submit_urb(h, tag, @urb_type_interrupt, endpoint, data_or_length)
 
   @doc """
   Arm readiness notification: usbfs signals `POLLOUT` when a URB is reapable.

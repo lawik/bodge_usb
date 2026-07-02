@@ -720,17 +720,23 @@ static ERL_NIF_TERM urb_status_term(ErlNifEnv *env, int status) {
     return errno_atom(env, status < 0 ? -status : status);
 }
 
-// submit_bulk(handle, tag :: u64, endpoint, data_or_length) -> :ok | {:error, atom}
-// Fast, non-blocking SUBMITURB: hands a bulk URB to the kernel and returns
-// immediately. The URB (and its buffer) are tracked on the fd until reaped.
-static ERL_NIF_TERM nif_submit_bulk(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+// submit_urb(handle, tag :: u64, urb_type, endpoint, data_or_length)
+//   -> :ok | {:error, atom}
+// Fast, non-blocking SUBMITURB: hands a URB (bulk or interrupt) to the kernel
+// and returns immediately. urb_type is USBDEVFS_URB_TYPE_BULK/INTERRUPT. The URB
+// (and its buffer) are tracked on the fd until reaped.
+static ERL_NIF_TERM nif_submit(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
     UsbFd *r;
     ErlNifUInt64 tag;
-    unsigned ep;
+    unsigned urb_type, ep;
     if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
         !enif_get_uint64(env, argv[1], &tag) ||
-        !get_bounded(env, argv[2], 0xFF, &ep))
+        !get_bounded(env, argv[2], 0xFF, &urb_type) ||
+        !get_bounded(env, argv[3], 0xFF, &ep))
+        return enif_make_badarg(env);
+
+    if (urb_type != USBDEVFS_URB_TYPE_BULK && urb_type != USBDEVFS_URB_TYPE_INTERRUPT)
         return enif_make_badarg(env);
 
     int is_in = (ep & 0x80) != 0;
@@ -739,11 +745,11 @@ static ERL_NIF_TERM nif_submit_bulk(ErlNifEnv *env, int argc, const ERL_NIF_TERM
     size_t len;
     if (is_in) {
         unsigned long n;
-        if (!enif_get_ulong(env, argv[3], &n) || n > BULK_MAX_LEN)
+        if (!enif_get_ulong(env, argv[4], &n) || n > BULK_MAX_LEN)
             return enif_make_badarg(env);
         len = (size_t)n;
     } else {
-        if (!enif_inspect_iolist_as_binary(env, argv[3], &out_data) ||
+        if (!enif_inspect_iolist_as_binary(env, argv[4], &out_data) ||
             out_data.size > BULK_MAX_LEN)
             return enif_make_badarg(env);
         len = out_data.size;
@@ -765,7 +771,7 @@ static ERL_NIF_TERM nif_submit_bulk(ErlNifEnv *env, int argc, const ERL_NIF_TERM
         if (!is_in)
             memcpy(u->buffer, out_data.data, len);
     }
-    u->kurb.type = USBDEVFS_URB_TYPE_BULK;
+    u->kurb.type = (unsigned char)urb_type;
     u->kurb.endpoint = (unsigned char)ep;
     u->kurb.buffer = u->buffer;
     u->kurb.buffer_length = (int)len;
@@ -952,7 +958,7 @@ static ErlNifFunc nif_funcs[] = {
     {"detach_driver", 2, nif_detach_driver, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"attach_driver", 2, nif_attach_driver, ERL_NIF_DIRTY_JOB_IO_BOUND},
     // async engine: all non-blocking, run inline on a normal scheduler.
-    {"submit_bulk", 4, nif_submit_bulk, 0},
+    {"submit_urb", 5, nif_submit, 0},
     {"select", 2, nif_select, 0},
     {"reap", 1, nif_reap, 0},
     {"discard", 2, nif_discard, 0},

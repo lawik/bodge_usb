@@ -184,9 +184,16 @@ defmodule CircuitsUsb.ShimTest do
   end
 
   describe "async primitives (no device needed)" do
-    test "submit_bulk reaches the kernel (ENOTTY on /dev/null)" do
+    test "submit_bulk/interrupt reach the kernel (ENOTTY on /dev/null)" do
       {:ok, h} = Shim.open("/dev/null", [:rdwr])
       assert {:error, :enotty} = Shim.submit_bulk(h, 1, 0x81, 64)
+      assert {:error, :enotty} = Shim.submit_interrupt(h, 2, 0x81, 64)
+      Shim.close(h)
+    end
+
+    test "submit_urb rejects an unknown URB type as badarg" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert_raise ArgumentError, fn -> Shim.submit_urb(h, 1, 99, 0x81, 64) end
       Shim.close(h)
     end
 

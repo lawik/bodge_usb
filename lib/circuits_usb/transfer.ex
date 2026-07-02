@@ -44,6 +44,18 @@ defmodule CircuitsUsb.Transfer do
   @spec release_interface(server(), non_neg_integer()) :: :ok | {:error, atom()}
   def release_interface(server, iface), do: GenServer.call(server, {:release, iface})
 
+  @doc "Name of the kernel driver bound to an interface (or `{:error, :enodata}`)."
+  @spec get_driver(server(), non_neg_integer()) :: {:ok, binary()} | {:error, atom()}
+  def get_driver(server, iface), do: GenServer.call(server, {:get_driver, iface})
+
+  @doc "Detach the kernel driver from an interface so it can be claimed."
+  @spec detach_driver(server(), non_neg_integer()) :: :ok | {:error, atom()}
+  def detach_driver(server, iface), do: GenServer.call(server, {:detach, iface})
+
+  @doc "Reattach the kernel driver to an interface."
+  @spec attach_driver(server(), non_neg_integer()) :: :ok | {:error, atom()}
+  def attach_driver(server, iface), do: GenServer.call(server, {:attach, iface})
+
   @doc """
   Bulk IN transfer on an IN endpoint address (bit 7 set). Blocks the caller
   until it completes, times out, or fails.
@@ -52,7 +64,7 @@ defmodule CircuitsUsb.Transfer do
   @spec bulk_in(server(), 0..255, non_neg_integer(), timeout()) ::
           {:ok, binary()} | {:error, term()}
   def bulk_in(server, endpoint, length, timeout \\ 1000) do
-    GenServer.call(server, {:bulk, endpoint, length, timeout}, call_timeout(timeout))
+    GenServer.call(server, {:transfer, :bulk, endpoint, length, timeout}, call_timeout(timeout))
   end
 
   @doc """
@@ -63,7 +75,37 @@ defmodule CircuitsUsb.Transfer do
   @spec bulk_out(server(), 0..255, iodata(), timeout()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def bulk_out(server, endpoint, data, timeout \\ 1000) do
-    GenServer.call(server, {:bulk, endpoint, data, timeout}, call_timeout(timeout))
+    GenServer.call(server, {:transfer, :bulk, endpoint, data, timeout}, call_timeout(timeout))
+  end
+
+  @doc """
+  Interrupt IN transfer on an IN endpoint address. Blocks the caller until it
+  completes, times out, or fails. Returns `{:ok, binary}` / `{:error, :timeout}`
+  / `{:error, errno_atom}`.
+  """
+  @spec interrupt_in(server(), 0..255, non_neg_integer(), timeout()) ::
+          {:ok, binary()} | {:error, term()}
+  def interrupt_in(server, endpoint, length, timeout \\ 1000) do
+    GenServer.call(
+      server,
+      {:transfer, :interrupt, endpoint, length, timeout},
+      call_timeout(timeout)
+    )
+  end
+
+  @doc """
+  Interrupt OUT transfer on an OUT endpoint address. Blocks the caller until it
+  completes, times out, or fails. Returns `{:ok, bytes_written}` /
+  `{:error, :timeout}` / `{:error, errno_atom}`.
+  """
+  @spec interrupt_out(server(), 0..255, iodata(), timeout()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def interrupt_out(server, endpoint, data, timeout \\ 1000) do
+    GenServer.call(
+      server,
+      {:transfer, :interrupt, endpoint, data, timeout},
+      call_timeout(timeout)
+    )
   end
 
   # Give the GenServer call some slack beyond the transfer timeout so the
@@ -93,6 +135,12 @@ defmodule CircuitsUsb.Transfer do
     end
   end
 
+  defp submit(:bulk, handle, tag, endpoint, data),
+    do: Shim.submit_bulk(handle, tag, endpoint, data)
+
+  defp submit(:interrupt, handle, tag, endpoint, data),
+    do: Shim.submit_interrupt(handle, tag, endpoint, data)
+
   @impl true
   def handle_call({:claim, iface}, _from, state),
     do: {:reply, Shim.claim_interface(state.handle, iface), state}
@@ -100,10 +148,19 @@ defmodule CircuitsUsb.Transfer do
   def handle_call({:release, iface}, _from, state),
     do: {:reply, Shim.release_interface(state.handle, iface), state}
 
-  def handle_call({:bulk, endpoint, data_or_length, timeout}, from, state) do
+  def handle_call({:get_driver, iface}, _from, state),
+    do: {:reply, Shim.get_driver(state.handle, iface), state}
+
+  def handle_call({:detach, iface}, _from, state),
+    do: {:reply, Shim.detach_driver(state.handle, iface), state}
+
+  def handle_call({:attach, iface}, _from, state),
+    do: {:reply, Shim.attach_driver(state.handle, iface), state}
+
+  def handle_call({:transfer, kind, endpoint, data_or_length, timeout}, from, state) do
     tag = state.next_tag
 
-    case Shim.submit_bulk(state.handle, tag, endpoint, data_or_length) do
+    case submit(kind, state.handle, tag, endpoint, data_or_length) do
       :ok ->
         timer =
           if is_integer(timeout) and timeout > 0,

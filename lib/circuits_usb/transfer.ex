@@ -89,18 +89,19 @@ defmodule CircuitsUsb.Transfer do
   @spec bulk_in(server(), 0..255, non_neg_integer(), timeout()) ::
           {:ok, binary()} | {:error, term()}
   def bulk_in(server, endpoint, length, timeout \\ 1000) do
-    GenServer.call(server, {:transfer, :bulk, endpoint, length, timeout}, call_timeout(timeout))
+    GenServer.call(server, {:transfer, :bulk, endpoint, length, timeout, []}, call_timeout(timeout))
   end
 
   @doc """
   Bulk OUT transfer on an OUT endpoint address (bit 7 clear). Blocks the caller
-  until it completes, times out, or fails.
+  until it completes, times out, or fails. `opts[:zero_packet]` appends a
+  terminating zero-length packet.
   Returns `{:ok, bytes_written}` / `{:error, :timeout}` / `{:error, errno_atom}`.
   """
-  @spec bulk_out(server(), 0..255, iodata(), timeout()) ::
+  @spec bulk_out(server(), 0..255, iodata(), timeout(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def bulk_out(server, endpoint, data, timeout \\ 1000) do
-    GenServer.call(server, {:transfer, :bulk, endpoint, data, timeout}, call_timeout(timeout))
+  def bulk_out(server, endpoint, data, timeout \\ 1000, opts \\ []) do
+    GenServer.call(server, {:transfer, :bulk, endpoint, data, timeout, opts}, call_timeout(timeout))
   end
 
   @doc """
@@ -113,7 +114,7 @@ defmodule CircuitsUsb.Transfer do
   def interrupt_in(server, endpoint, length, timeout \\ 1000) do
     GenServer.call(
       server,
-      {:transfer, :interrupt, endpoint, length, timeout},
+      {:transfer, :interrupt, endpoint, length, timeout, []},
       call_timeout(timeout)
     )
   end
@@ -123,12 +124,12 @@ defmodule CircuitsUsb.Transfer do
   completes, times out, or fails. Returns `{:ok, bytes_written}` /
   `{:error, :timeout}` / `{:error, errno_atom}`.
   """
-  @spec interrupt_out(server(), 0..255, iodata(), timeout()) ::
+  @spec interrupt_out(server(), 0..255, iodata(), timeout(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def interrupt_out(server, endpoint, data, timeout \\ 1000) do
+  def interrupt_out(server, endpoint, data, timeout \\ 1000, opts \\ []) do
     GenServer.call(
       server,
-      {:transfer, :interrupt, endpoint, data, timeout},
+      {:transfer, :interrupt, endpoint, data, timeout, opts},
       call_timeout(timeout)
     )
   end
@@ -160,11 +161,11 @@ defmodule CircuitsUsb.Transfer do
     end
   end
 
-  defp submit(:bulk, handle, tag, endpoint, data),
-    do: Shim.submit_bulk(handle, tag, endpoint, data)
+  defp submit(:bulk, handle, tag, endpoint, data, opts),
+    do: Shim.submit_bulk(handle, tag, endpoint, data, opts)
 
-  defp submit(:interrupt, handle, tag, endpoint, data),
-    do: Shim.submit_interrupt(handle, tag, endpoint, data)
+  defp submit(:interrupt, handle, tag, endpoint, data, opts),
+    do: Shim.submit_interrupt(handle, tag, endpoint, data, opts)
 
   @impl true
   def handle_call({:claim, iface}, _from, state),
@@ -197,10 +198,10 @@ defmodule CircuitsUsb.Transfer do
   def handle_call({:control_out, request, value, index, data, timeout}, _from, state),
     do: {:reply, Shim.control_out(state.handle, request, value, index, data, timeout), state}
 
-  def handle_call({:transfer, kind, endpoint, data_or_length, timeout}, from, state) do
+  def handle_call({:transfer, kind, endpoint, data_or_length, timeout, opts}, from, state) do
     tag = state.next_tag
 
-    case submit(kind, state.handle, tag, endpoint, data_or_length) do
+    case submit(kind, state.handle, tag, endpoint, data_or_length, opts) do
       :ok ->
         timer =
           if is_integer(timeout) and timeout > 0,
@@ -237,6 +238,13 @@ defmodule CircuitsUsb.Transfer do
 
   @impl true
   def terminate(_reason, state) do
+    # Reply to any in-flight callers before closing so they get a typed result
+    # instead of a GenServer exit (matches the "no crash on teardown" contract).
+    Enum.each(state.pending, fn {_tag, p} ->
+      if p.timer, do: Process.cancel_timer(p.timer)
+      GenServer.reply(p.from, {:error, :closed})
+    end)
+
     Shim.close(state.handle)
     :ok
   end

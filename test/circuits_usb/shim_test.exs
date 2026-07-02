@@ -208,9 +208,17 @@ defmodule CircuitsUsb.ShimTest do
       Shim.close(h)
     end
 
-    test "submit_urb rejects an unknown URB type as badarg" do
+    test "submit_urb rejects an unknown URB type and bad flags as badarg" do
       {:ok, h} = Shim.open("/dev/null", [:rdwr])
-      assert_raise ArgumentError, fn -> Shim.submit_urb(h, 1, 99, 0x81, 64) end
+      assert_raise ArgumentError, fn -> Shim.submit_urb(h, 1, 99, 0x81, 64, 0) end
+      # 0x40 (ZERO_PACKET) is the only allowed flag.
+      assert_raise ArgumentError, fn -> Shim.submit_urb(h, 1, 3, 0x01, "x", 0x02) end
+      Shim.close(h)
+    end
+
+    test "zero_packet flag is accepted and reaches the kernel" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert {:error, :enotty} = Shim.submit_bulk(h, 1, 0x01, "data", zero_packet: true)
       Shim.close(h)
     end
 

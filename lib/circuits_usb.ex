@@ -88,11 +88,11 @@ defmodule CircuitsUsb do
   def bulk_in(device, endpoint, length, timeout \\ 1000),
     do: Transfer.bulk_in(device, endpoint, length, timeout)
 
-  @doc "Bulk OUT transfer. See `CircuitsUsb.Transfer.bulk_out/4`."
-  @spec bulk_out(device(), 0..255, iodata(), timeout()) ::
+  @doc "Bulk OUT transfer. `opts[:zero_packet]` appends a terminating ZLP. See `CircuitsUsb.Transfer.bulk_out/5`."
+  @spec bulk_out(device(), 0..255, iodata(), timeout(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def bulk_out(device, endpoint, data, timeout \\ 1000),
-    do: Transfer.bulk_out(device, endpoint, data, timeout)
+  def bulk_out(device, endpoint, data, timeout \\ 1000, opts \\ []),
+    do: Transfer.bulk_out(device, endpoint, data, timeout, opts)
 
   @doc "Interrupt IN transfer. See `CircuitsUsb.Transfer.interrupt_in/4`."
   @spec interrupt_in(device(), 0..255, non_neg_integer(), timeout()) ::
@@ -100,11 +100,11 @@ defmodule CircuitsUsb do
   def interrupt_in(device, endpoint, length, timeout \\ 1000),
     do: Transfer.interrupt_in(device, endpoint, length, timeout)
 
-  @doc "Interrupt OUT transfer. See `CircuitsUsb.Transfer.interrupt_out/4`."
-  @spec interrupt_out(device(), 0..255, iodata(), timeout()) ::
+  @doc "Interrupt OUT transfer. `opts[:zero_packet]` appends a terminating ZLP. See `CircuitsUsb.Transfer.interrupt_out/5`."
+  @spec interrupt_out(device(), 0..255, iodata(), timeout(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def interrupt_out(device, endpoint, data, timeout \\ 1000),
-    do: Transfer.interrupt_out(device, endpoint, data, timeout)
+  def interrupt_out(device, endpoint, data, timeout \\ 1000, opts \\ []),
+    do: Transfer.interrupt_out(device, endpoint, data, timeout, opts)
 
   @doc "Control IN transfer. See `CircuitsUsb.Transfer.control_in/6`."
   @spec control_in(device(), 0..255, 0..0xFFFF, 0..0xFFFF, non_neg_integer(), timeout()) ::

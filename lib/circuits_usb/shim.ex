@@ -189,34 +189,38 @@ defmodule CircuitsUsb.Shim do
 
   # ---- async engine primitives (B5) --------------------------------------
 
-  # USBDEVFS_URB_TYPE_* codes.
+  # USBDEVFS_URB_TYPE_* codes and flags.
   @urb_type_interrupt 1
   @urb_type_bulk 3
+  @urb_zero_packet 0x40
 
   @doc """
   Submit a URB asynchronously (`USBDEVFS_SUBMITURB`). Returns immediately.
   `urb_type` is `USBDEVFS_URB_TYPE_BULK` (3) or `_INTERRUPT` (1). `tag` is a
   caller-chosen 64-bit id echoed back by `reap/1`. Direction is bit 7 of
-  `endpoint`; IN takes a length, OUT takes iodata. The interface must be claimed.
-  Pair with `select/2` + `reap/1` to collect the completion. Prefer
-  `submit_bulk/4` and `submit_interrupt/4`.
+  `endpoint`; IN takes a length, OUT takes iodata. `flags` may include
+  `0x40` (`USBDEVFS_URB_ZERO_PACKET`) to append a terminating zero-length packet
+  on an OUT transfer. The interface must be claimed. Pair with `select/2` +
+  `reap/1`. Prefer `submit_bulk/4` and `submit_interrupt/4`.
   """
-  @spec submit_urb(handle(), non_neg_integer(), 1..3, 0..255, iodata() | non_neg_integer()) ::
+  @spec submit_urb(handle(), non_neg_integer(), 1..3, 0..255, iodata() | non_neg_integer(), 0..0x40) ::
           :ok | {:error, atom()}
-  def submit_urb(_h, _tag, _urb_type, _endpoint, _data_or_length),
+  def submit_urb(_h, _tag, _urb_type, _endpoint, _data_or_length, _flags),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  @doc "Submit a bulk URB. See `submit_urb/5`."
-  @spec submit_bulk(handle(), non_neg_integer(), 0..255, iodata() | non_neg_integer()) ::
+  @doc "Submit a bulk URB. `opts[:zero_packet]` appends a terminating ZLP (OUT)."
+  @spec submit_bulk(handle(), non_neg_integer(), 0..255, iodata() | non_neg_integer(), keyword()) ::
           :ok | {:error, atom()}
-  def submit_bulk(h, tag, endpoint, data_or_length),
-    do: submit_urb(h, tag, @urb_type_bulk, endpoint, data_or_length)
+  def submit_bulk(h, tag, endpoint, data_or_length, opts \\ []),
+    do: submit_urb(h, tag, @urb_type_bulk, endpoint, data_or_length, flags(opts))
 
-  @doc "Submit an interrupt URB. See `submit_urb/5`."
-  @spec submit_interrupt(handle(), non_neg_integer(), 0..255, iodata() | non_neg_integer()) ::
+  @doc "Submit an interrupt URB. See `submit_bulk/5`."
+  @spec submit_interrupt(handle(), non_neg_integer(), 0..255, iodata() | non_neg_integer(), keyword()) ::
           :ok | {:error, atom()}
-  def submit_interrupt(h, tag, endpoint, data_or_length),
-    do: submit_urb(h, tag, @urb_type_interrupt, endpoint, data_or_length)
+  def submit_interrupt(h, tag, endpoint, data_or_length, opts \\ []),
+    do: submit_urb(h, tag, @urb_type_interrupt, endpoint, data_or_length, flags(opts))
+
+  defp flags(opts), do: if(opts[:zero_packet], do: @urb_zero_packet, else: 0)
 
   @doc """
   Submit an isochronous URB (`USBDEVFS_URB_TYPE_ISO`, scheduled ASAP).

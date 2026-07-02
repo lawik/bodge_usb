@@ -762,23 +762,27 @@ static ERL_NIF_TERM urb_status_term(ErlNifEnv *env, int status) {
     return errno_atom(env, status < 0 ? -status : status);
 }
 
-// submit_urb(handle, tag :: u64, urb_type, endpoint, data_or_length)
+// submit_urb(handle, tag :: u64, urb_type, endpoint, data_or_length, flags)
 //   -> :ok | {:error, atom}
 // Fast, non-blocking SUBMITURB: hands a URB (bulk or interrupt) to the kernel
-// and returns immediately. urb_type is USBDEVFS_URB_TYPE_BULK/INTERRUPT. The URB
-// (and its buffer) are tracked on the fd until reaped.
+// and returns immediately. urb_type is USBDEVFS_URB_TYPE_BULK/INTERRUPT. flags is
+// a subset of {USBDEVFS_URB_ZERO_PACKET} -- a terminating zero-length packet for
+// OUT transfers. The URB (and its buffer) are tracked on the fd until reaped.
 static ERL_NIF_TERM nif_submit(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
     UsbFd *r;
     ErlNifUInt64 tag;
-    unsigned urb_type, ep;
+    unsigned urb_type, ep, flags;
     if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
         !enif_get_uint64(env, argv[1], &tag) ||
         !get_bounded(env, argv[2], 0xFF, &urb_type) ||
-        !get_bounded(env, argv[3], 0xFF, &ep))
+        !get_bounded(env, argv[3], 0xFF, &ep) ||
+        !enif_get_uint(env, argv[5], &flags))
         return enif_make_badarg(env);
 
     if (urb_type != USBDEVFS_URB_TYPE_BULK && urb_type != USBDEVFS_URB_TYPE_INTERRUPT)
+        return enif_make_badarg(env);
+    if (flags & ~(unsigned)USBDEVFS_URB_ZERO_PACKET)
         return enif_make_badarg(env);
 
     int is_in = (ep & 0x80) != 0;
@@ -815,6 +819,7 @@ static ERL_NIF_TERM nif_submit(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     }
     u->kurb.type = (unsigned char)urb_type;
     u->kurb.endpoint = (unsigned char)ep;
+    u->kurb.flags = flags;
     u->kurb.buffer = u->buffer;
     u->kurb.buffer_length = (int)len;
     u->kurb.usercontext = u;
@@ -1165,7 +1170,7 @@ static ErlNifFunc nif_funcs[] = {
     {"clear_halt", 2, nif_clear_halt, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"reset", 1, nif_reset, ERL_NIF_DIRTY_JOB_IO_BOUND},
     // async engine: all non-blocking, run inline on a normal scheduler.
-    {"submit_urb", 5, nif_submit, 0},
+    {"submit_urb", 6, nif_submit, 0},
     {"submit_iso", 5, nif_submit_iso, 0},
     {"select", 2, nif_select, 0},
     {"select_read", 2, nif_select_read, 0},

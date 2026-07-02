@@ -72,7 +72,7 @@ defmodule CircuitsUsb.TransferEngineTest do
     end
 
     @tag :usbfs
-    test "bulk OUT then IN through the engine" do
+    test "bulk OUT then IN through the engine, incl. a terminating zero packet" do
       node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
       {:ok, dev} = Enumeration.read_descriptors(node)
       {iface, ep_in, ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
@@ -83,10 +83,28 @@ defmodule CircuitsUsb.TransferEngineTest do
         :ok = Transfer.claim_interface(eng, iface)
         {:ok, data} = Transfer.bulk_in(eng, ep_in, 4096, 2000)
         assert {:ok, 4096} = Transfer.bulk_out(eng, ep_out, data, 2000)
+        # ZLP (USBFS_URB_ZERO_PACKET) on a multiple-of-maxpacket OUT.
+        assert {:ok, 4096} = Transfer.bulk_out(eng, ep_out, data, 2000, zero_packet: true)
       after
         Transfer.release_interface(eng, iface)
         Transfer.stop(eng)
       end
+    end
+
+    @tag :usbfs
+    test "stopping the engine mid-transfer replies :closed (no caller crash)" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, dev} = Enumeration.read_descriptors(node)
+      {iface, ep_in, _ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
+
+      {:ok, eng} = Transfer.start_link(node: node)
+      :ok = Transfer.claim_interface(eng, iface)
+
+      # A slow read with no timeout; stopping the engine must reply, not crash us.
+      task = Task.async(fn -> Transfer.bulk_in(eng, ep_in, 1_048_576, :infinity) end)
+      Process.sleep(3)
+      assert :ok = Transfer.stop(eng)
+      assert {:error, :closed} = Task.await(task, 5000)
     end
   end
 

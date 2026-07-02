@@ -141,6 +141,30 @@ defmodule CircuitsUsb.ShimTest do
     end
   end
 
+  describe "bulk / claim marshalling (no device needed)" do
+    test "well-formed bulk and claim ioctls reach the kernel (ENOTTY on /dev/null)" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert {:error, :enotty} = Shim.bulk_in(h, 0x81, 64, 100)
+      assert {:error, :enotty} = Shim.bulk_out(h, 0x01, "data", 100)
+      assert {:error, :enotty} = Shim.claim_interface(h, 0)
+      assert {:error, :enotty} = Shim.release_interface(h, 0)
+      Shim.close(h)
+    end
+
+    test "oversized bulk is rejected before the syscall" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert_raise ArgumentError, fn -> Shim.bulk_in(h, 0x81, 20_000_000, 100) end
+      Shim.close(h)
+    end
+
+    test "bulk/claim on a closed handle return :ebadf" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      :ok = Shim.close(h)
+      assert {:error, :ebadf} = Shim.bulk_in(h, 0x81, 64, 100)
+      assert {:error, :ebadf} = Shim.claim_interface(h, 0)
+    end
+  end
+
   # Integration against a real usbfs node (Part A A1). Set CIRCUITS_USB_TEST_NODE
   # to e.g. /dev/bus/usb/001/002. usbfs read() returns the cached descriptors;
   # the first 18 bytes are the device descriptor (bLength=18, bDescriptorType=1).

@@ -402,6 +402,129 @@ static ERL_NIF_TERM nif_set_interface(ErlNifEnv *env, int argc, const ERL_NIF_TE
     return am_ok;
 }
 
+// Bulk transfers can be large; cap allocations at a sane ceiling.
+#define BULK_MAX_LEN (16u * 1024 * 1024)
+
+// bulk_transfer(handle, endpoint, data_or_length, timeout_ms)
+//   IN  (endpoint band 0x80 != 0): data_or_length is the length to read;
+//       returns {:ok, binary} of what the device sent.
+//   OUT: data_or_length is the payload (iodata); returns {:ok, bytes_written}.
+//
+// Same marshalling + pointer-fixup pattern as control_transfer, over struct
+// usbdevfs_bulktransfer. The interface owning the endpoint must be claimed
+// first. Blocks until the transfer completes or times out -> dirty I/O.
+static ERL_NIF_TERM nif_bulk_transfer(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    unsigned ep, timeout;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !get_bounded(env, argv[1], 0xFF, &ep) ||
+        !enif_get_uint(env, argv[3], &timeout))
+        return enif_make_badarg(env);
+
+    int is_in = (ep & 0x80) != 0;
+
+    ErlNifBinary out_data = {0};
+    size_t len;
+    if (is_in) {
+        unsigned long n;
+        if (!enif_get_ulong(env, argv[2], &n) || n > BULK_MAX_LEN)
+            return enif_make_badarg(env);
+        len = (size_t)n;
+    } else {
+        if (!enif_inspect_iolist_as_binary(env, argv[2], &out_data) ||
+            out_data.size > BULK_MAX_LEN)
+            return enif_make_badarg(env);
+        len = out_data.size;
+    }
+
+    unsigned char *buf = NULL;
+    if (len) {
+        buf = enif_alloc(len);
+        if (!buf)
+            return err_tuple(env, ENOMEM);
+        if (!is_in)
+            memcpy(buf, out_data.data, len);
+    }
+
+    struct usbdevfs_bulktransfer bt;
+    memset(&bt, 0, sizeof(bt));
+    bt.ep = ep;
+    bt.len = (unsigned int)len;
+    bt.timeout = timeout;
+    bt.data = buf; // pointer fixup
+
+    int n, e = 0;
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        enif_free(buf);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    n = ioctl(r->fd, USBDEVFS_BULK, &bt);
+    e = errno;
+    enif_mutex_unlock(r->lock);
+
+    if (n < 0) {
+        enif_free(buf);
+        return err_tuple(env, e);
+    }
+
+    ERL_NIF_TERM result;
+    if (is_in) {
+        ErlNifBinary rb;
+        if (!enif_alloc_binary((size_t)n, &rb)) {
+            enif_free(buf);
+            return err_tuple(env, ENOMEM);
+        }
+        if (n > 0)
+            memcpy(rb.data, buf, (size_t)n);
+        result = enif_make_tuple2(env, am_ok, enif_make_binary(env, &rb));
+    } else {
+        result = enif_make_tuple2(env, am_ok, enif_make_ulong(env, (unsigned long)n));
+    }
+    enif_free(buf);
+    return result;
+}
+
+// A fast fd bookkeeping ioctl whose only argument is an unsigned int passed by
+// reference (claim/release interface, clear halt). Runs inline.
+static ERL_NIF_TERM uint_ioctl(ErlNifEnv *env, const ERL_NIF_TERM argv[],
+                               unsigned long request) {
+    UsbFd *r;
+    unsigned value;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_uint(env, argv[1], &value))
+        return enif_make_badarg(env);
+
+    unsigned int arg = value;
+    int rc, e = 0;
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    rc = ioctl(r->fd, request, &arg);
+    e = errno;
+    enif_mutex_unlock(r->lock);
+
+    if (rc < 0)
+        return err_tuple(env, e);
+    return am_ok;
+}
+
+// claim_interface(handle, interface) -> :ok | {:error, atom}
+static ERL_NIF_TERM nif_claim_interface(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    return uint_ioctl(env, argv, USBDEVFS_CLAIMINTERFACE);
+}
+
+// release_interface(handle, interface) -> :ok | {:error, atom}
+static ERL_NIF_TERM nif_release_interface(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    return uint_ioctl(env, argv, USBDEVFS_RELEASEINTERFACE);
+}
+
 // fileno(handle) -> integer | {:error, :ebadf}   (debug aid; verifies no leak)
 static ERL_NIF_TERM nif_fileno(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
@@ -445,7 +568,11 @@ static ErlNifFunc nif_funcs[] = {
     // Blocking usbfs ioctls run on a dirty I/O scheduler (correctness-first,
     // per B4; the async select/reap engine in B5 supersedes the blocking path).
     {"control_transfer", 7, nif_control_transfer, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"bulk_transfer", 4, nif_bulk_transfer, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"set_interface", 3, nif_set_interface, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    // claim/release are fast fd bookkeeping ops -> normal scheduler.
+    {"claim_interface", 2, nif_claim_interface, 0},
+    {"release_interface", 2, nif_release_interface, 0},
 };
 
 ERL_NIF_INIT(Elixir.CircuitsUsb.Shim, nif_funcs, load, NULL, NULL, NULL)

@@ -16,6 +16,8 @@ defmodule CircuitsUsb.Shim do
   for errnos without a dedicated name.
   """
 
+  import Bitwise
+
   @typedoc "An open file-descriptor handle (a NIF resource)."
   @opaque handle :: reference()
 
@@ -100,6 +102,49 @@ defmodule CircuitsUsb.Shim do
   def control_out(h, request, value, index, data, timeout_ms \\ 1000) do
     control_transfer(h, 0x00, request, value, index, data, timeout_ms)
   end
+
+  @doc """
+  Issue a usbfs bulk transfer (`USBDEVFS_BULK`).
+
+  Direction is taken from bit 7 of `endpoint`:
+
+    * IN  (`0x80` set): `data_or_length` is the number of bytes to read;
+      returns `{:ok, binary}`.
+    * OUT (`0x80` clear): `data_or_length` is the payload (iodata);
+      returns `{:ok, bytes_written}`.
+
+  The interface owning the endpoint must be claimed first (see
+  `claim_interface/2`). Runs on a dirty I/O scheduler.
+
+  Prefer `bulk_in/4` and `bulk_out/4`.
+  """
+  @spec bulk_transfer(handle(), 0..255, iodata() | non_neg_integer(), non_neg_integer()) ::
+          {:ok, binary()} | {:ok, non_neg_integer()} | {:error, atom()}
+  def bulk_transfer(_h, _endpoint, _data_or_length, _timeout_ms),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc "Bulk IN transfer. Returns `{:ok, binary}` of up to `length` bytes."
+  @spec bulk_in(handle(), 0..255, non_neg_integer(), non_neg_integer()) ::
+          {:ok, binary()} | {:error, atom()}
+  def bulk_in(h, endpoint, length, timeout_ms \\ 1000),
+    do: bulk_transfer(h, endpoint ||| 0x80, length, timeout_ms)
+
+  @doc "Bulk OUT transfer. Returns `{:ok, bytes_written}`."
+  @spec bulk_out(handle(), 0..255, iodata(), non_neg_integer()) ::
+          {:ok, non_neg_integer()} | {:error, atom()}
+  def bulk_out(h, endpoint, data, timeout_ms \\ 1000),
+    do: bulk_transfer(h, endpoint &&& 0x7F, data, timeout_ms)
+
+  @doc """
+  Claim an interface (`USBDEVFS_CLAIMINTERFACE`) so its endpoints can be used
+  for transfers. Fast; runs inline.
+  """
+  @spec claim_interface(handle(), non_neg_integer()) :: :ok | {:error, atom()}
+  def claim_interface(_h, _interface), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc "Release a claimed interface (`USBDEVFS_RELEASEINTERFACE`). Fast; runs inline."
+  @spec release_interface(handle(), non_neg_integer()) :: :ok | {:error, atom()}
+  def release_interface(_h, _interface), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Select an alternate setting for an interface (`USBDEVFS_SETINTERFACE`).

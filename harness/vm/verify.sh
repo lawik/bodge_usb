@@ -55,6 +55,13 @@ done
 [ -n "$node" ] || { echo "ERROR: no gadget-zero node appeared"; exit 1; }
 echo "usbfs node: $node"
 
+# udev auto-loads usbtest (its modalias matches gadget zero) and it claims the
+# interface, which would block our own claim_interface with EBUSY. Kernel-driver
+# detach is B6; until then, free the interface at the harness level. Control and
+# descriptor tests don't need the interface, so removing usbtest is safe.
+command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null || true
+modprobe -r usbtest 2>/dev/null || rmmod usbtest 2>/dev/null || true
+
 echo "== :usbfs integration test =="
 CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only usbfs
 

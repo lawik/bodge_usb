@@ -12,7 +12,7 @@ defmodule CircuitsUsb.MixProject do
       make_clean: ["clean"],
       deps: deps(),
       name: "Circuits usb",
-      description: "TODO: write a proper description",
+      description: "Native USB for Elixir on Linux via a usbfs-scoped syscall NIF",
       docs: docs(),
       package: package(),
       aliases: aliases(),

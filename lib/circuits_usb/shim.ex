@@ -60,6 +60,55 @@ defmodule CircuitsUsb.Shim do
   def write(_handle, _data), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  Issue a usbfs control transfer (`USBDEVFS_CONTROL`).
+
+  Direction is taken from bit 7 of `request_type`:
+
+    * IN  (`0x80` set): `data_or_length` is the number of bytes to read;
+      returns `{:ok, binary}` with what the device returned (may be shorter).
+    * OUT (`0x80` clear): `data_or_length` is the payload (iodata);
+      returns `{:ok, bytes_written}`.
+
+  `timeout_ms` is the transfer timeout in milliseconds (`0` = no timeout). The
+  data buffer is bounded by `wLength` (0..65535); oversized requests raise
+  `ArgumentError` before any syscall. Runs on a dirty I/O scheduler.
+
+  Prefer `control_in/6` and `control_out/6` for readability.
+  """
+  @spec control_transfer(
+          handle(),
+          0..255,
+          0..255,
+          0..0xFFFF,
+          0..0xFFFF,
+          iodata() | non_neg_integer(),
+          non_neg_integer()
+        ) :: {:ok, binary()} | {:ok, non_neg_integer()} | {:error, atom()}
+  def control_transfer(_h, _request_type, _request, _value, _index, _data_or_length, _timeout_ms),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc "Control IN transfer. Returns `{:ok, binary}` of up to `length` bytes."
+  @spec control_in(handle(), 0..255, 0..0xFFFF, 0..0xFFFF, non_neg_integer(), non_neg_integer()) ::
+          {:ok, binary()} | {:error, atom()}
+  def control_in(h, request, value, index, length, timeout_ms \\ 1000) do
+    control_transfer(h, 0x80, request, value, index, length, timeout_ms)
+  end
+
+  @doc "Control OUT transfer. Returns `{:ok, bytes_written}`."
+  @spec control_out(handle(), 0..255, 0..0xFFFF, 0..0xFFFF, iodata(), non_neg_integer()) ::
+          {:ok, non_neg_integer()} | {:error, atom()}
+  def control_out(h, request, value, index, data, timeout_ms \\ 1000) do
+    control_transfer(h, 0x00, request, value, index, data, timeout_ms)
+  end
+
+  @doc """
+  Select an alternate setting for an interface (`USBDEVFS_SETINTERFACE`).
+  Runs on a dirty I/O scheduler.
+  """
+  @spec set_interface(handle(), non_neg_integer(), non_neg_integer()) :: :ok | {:error, atom()}
+  def set_interface(_h, _interface, _altsetting), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   The underlying integer fd, or `{:error, :ebadf}` if closed. Diagnostic aid
   (used by tests to assert descriptors are actually released).
   """

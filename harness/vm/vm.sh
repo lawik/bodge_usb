@@ -156,10 +156,10 @@ cmd_provision_elixir() {
   cmd_ssh "bash $GUEST_REPO/harness/vm/provision-elixir.sh"
 }
 
-cmd_verify_b1() {
+cmd_verify() {
   vm_running || die "VM not running (run 'up' first)"
   ensure_mount
-  cmd_ssh "sudo bash $GUEST_REPO/harness/vm/verify-b1.sh"
+  cmd_ssh "sudo bash $GUEST_REPO/harness/vm/verify.sh"
 }
 
 cmd_status() {
@@ -181,12 +181,12 @@ case "${1:-}" in
   up)              shift; cmd_up "$@" ;;
   provision)       shift; cmd_provision "$@" ;;
   provision-elixir) shift; cmd_provision_elixir "$@" ;;
-  verify-b1)       shift; cmd_verify_b1 "$@" ;;
+  verify)          shift; cmd_verify "$@" ;;
   sync)            shift; cmd_sync "$@" ;;
   ssh)             shift; cmd_ssh "$@" ;;
   run)             shift; cmd_run "$@" ;;
   status)          shift; cmd_status "$@" ;;
   down)            shift; cmd_down "$@" ;;
   destroy)         shift; cmd_destroy "$@" ;;
-  *) echo "usage: $0 {up|provision|provision-elixir|verify-b1|sync|ssh [cmd]|run [stage]|status|down|destroy}" >&2; exit 2 ;;
+  *) echo "usage: $0 {up|provision|provision-elixir|verify|sync|ssh [cmd]|run [stage]|status|down|destroy}" >&2; exit 2 ;;
 esac

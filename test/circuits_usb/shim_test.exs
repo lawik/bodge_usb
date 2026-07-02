@@ -91,13 +91,53 @@ defmodule CircuitsUsb.ShimTest do
       fdcount = fn -> length(File.ls!("/proc/self/fd")) end
       before = fdcount.()
 
-      # Open many handles and drop each immediately without closing.
-      Enum.each(1..3000, fn _ -> {:ok, _h} = Shim.open("/dev/null", [:rdonly]) end)
-      :erlang.garbage_collect()
-      Process.sleep(50)
+      # Open in rounds, dropping each handle without closing, and force GC after
+      # each round. This proves the destructor reclaims dropped fds (live count
+      # returns to baseline) without ever exceeding the open-file ulimit -- the
+      # VM's is only 1024, so we keep at most ~200 handles live at a time while
+      # still exercising 4000 total open+drop cycles.
+      for _round <- 1..20 do
+        Enum.each(1..200, fn _ -> {:ok, _h} = Shim.open("/dev/null", [:rdonly]) end)
+        :erlang.garbage_collect()
+      end
 
+      Process.sleep(50)
       leaked = fdcount.() - before
-      assert leaked < 50, "leaked #{leaked} fds across 3000 open+drop+GC"
+      assert leaked < 50, "leaked #{leaked} fds across 4000 open+drop+GC"
+    end
+  end
+
+  describe "control_transfer marshalling (no device needed)" do
+    test "a well-formed control ioctl reaches the kernel (ENOTTY on a non-usbfs fd)" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      # Marshalling + pointer fixup succeed; /dev/null just doesn't implement it.
+      assert {:error, :enotty} = Shim.control_in(h, 0x06, 0x0100, 0x0000, 18, 100)
+      assert {:error, :enotty} = Shim.control_out(h, 0x00, 0, 0, "abc", 100)
+      assert {:error, :enotty} = Shim.set_interface(h, 0, 0)
+      Shim.close(h)
+    end
+
+    test "oversized data/length is rejected before the syscall" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert_raise ArgumentError, fn -> Shim.control_in(h, 6, 0, 0, 70_000, 100) end
+      big = :binary.copy(<<0>>, 70_000)
+      assert_raise ArgumentError, fn -> Shim.control_out(h, 0, 0, 0, big, 100) end
+      Shim.close(h)
+    end
+
+    test "out-of-range fields are rejected as badarg" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert_raise ArgumentError, fn -> Shim.control_transfer(h, 999, 6, 0, 0, 0, 100) end
+      assert_raise ArgumentError, fn -> Shim.control_transfer(h, 0x80, 6, 0x10000, 0, 0, 100) end
+      assert_raise ArgumentError, fn -> Shim.control_transfer(:nope, 0x80, 6, 0, 0, 0, 100) end
+      Shim.close(h)
+    end
+
+    test "control on a closed handle returns :ebadf" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      :ok = Shim.close(h)
+      assert {:error, :ebadf} = Shim.control_in(h, 6, 0x0100, 0, 18, 100)
+      assert {:error, :ebadf} = Shim.set_interface(h, 0, 0)
     end
   end
 
@@ -112,6 +152,29 @@ defmodule CircuitsUsb.ShimTest do
       assert {:ok, <<blength, btype, _rest::binary>>} = Shim.read(h, 18)
       assert blength == 18
       assert btype == 1
+      assert :ok = Shim.close(h)
+    end
+
+    # B2: a control IN transfer round-trips the data buffer. GET_DESCRIPTOR of
+    # the device descriptor returns Gadget Zero's known pattern (bLength 18,
+    # type 1, idVendor 0x0525, idProduct 0xa4a0), proving the usbdevfs_ctrltransfer
+    # marshalling and the .data pointer fixup (kernel DMA into our buffer).
+    @tag :usbfs
+    test "control IN GET_DESCRIPTOR round-trips against the gadget-zero pattern" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, h} = Shim.open(node, [:rdwr])
+
+      assert {:ok, desc} = Shim.control_in(h, 0x06, 0x0100, 0x0000, 18, 1000)
+      assert byte_size(desc) == 18
+
+      <<blength, btype, _bcd_usb::16, _cls, _sub, _proto, _mps0, vendor::little-16,
+        product::little-16, _rest::binary>> = desc
+
+      assert blength == 18
+      assert btype == 1
+      assert vendor == 0x0525
+      assert product == 0xA4A0
+
       assert :ok = Shim.close(h)
     end
   end

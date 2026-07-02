@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs IN the guest, as root. End-to-end B1 verification:
+# Runs IN the guest, as root. End-to-end library verification against real usbfs:
 #   1. build + host-safe tests of the circuits_usb mix project (guest toolchain)
 #   2. bring up a real usbfs node (dummy_hcd + g_zero)
 #   3. run the :usbfs integration test (Shim.open -> read descriptor -> close)
@@ -58,4 +58,4 @@ echo "usbfs node: $node"
 echo "== :usbfs integration test =="
 CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only usbfs
 
-echo "VERIFY_B1_DONE"
+echo "VERIFY_DONE"

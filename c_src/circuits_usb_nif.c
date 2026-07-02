@@ -19,7 +19,10 @@
 #include <fcntl.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <unistd.h>
+
+#include <linux/usbdevice_fs.h>
 
 #include <erl_nif.h>
 
@@ -126,6 +129,16 @@ static int parse_open_flags(ErlNifEnv *env, ERL_NIF_TERM list, int *out) {
         flags |= O_RDWR; // sensible default for usbfs
     *out = flags;
     return 0;
+}
+
+// Bounded unsigned getters: reject out-of-range values as badarg so a caller
+// can never overflow a usbfs struct field.
+static int get_bounded(ErlNifEnv *env, ERL_NIF_TERM t, unsigned max, unsigned *out) {
+    unsigned v;
+    if (!enif_get_uint(env, t, &v) || v > max)
+        return 0;
+    *out = v;
+    return 1;
 }
 
 // ---- NIFs ----------------------------------------------------------------
@@ -260,6 +273,135 @@ static ERL_NIF_TERM nif_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
     return enif_make_tuple2(env, am_ok, enif_make_ulong(env, (unsigned long)n));
 }
 
+// USBDEVFS_CONTROL wLength is a __u16, so transfers are bounded at 65535 bytes.
+#define CTRL_MAX_LEN 0xFFFF
+
+// control_transfer(handle, bmRequestType, bRequest, wValue, wIndex,
+//                  data_or_length, timeout_ms)
+//   IN  (bmRequestType band 0x80 != 0): data_or_length is the length to read;
+//       returns {:ok, binary} with the bytes the device returned.
+//   OUT: data_or_length is the payload (iodata); returns {:ok, bytes_written}.
+//
+// This is the B2 marshalling + pointer fixup: we build struct
+// usbdevfs_ctrltransfer ourselves (so the layout and _IOC_SIZE are ours, never
+// caller-supplied), allocate one stable buffer of exactly wLength, embed its
+// address in ctrl.data, run the ioctl, then read the buffer back. Over/undersized
+// requests are rejected here, before the syscall. USBDEVFS_CONTROL blocks until
+// the transfer completes or times out, so this runs on a dirty I/O scheduler.
+static ERL_NIF_TERM nif_control_transfer(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    unsigned rtype, req, wvalue, windex, timeout;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !get_bounded(env, argv[1], 0xFF, &rtype) ||
+        !get_bounded(env, argv[2], 0xFF, &req) ||
+        !get_bounded(env, argv[3], 0xFFFF, &wvalue) ||
+        !get_bounded(env, argv[4], 0xFFFF, &windex) ||
+        !enif_get_uint(env, argv[6], &timeout))
+        return enif_make_badarg(env);
+
+    int is_in = (rtype & 0x80) != 0;
+
+    // Determine wLength and, for OUT, the payload, validating size up front.
+    ErlNifBinary out_data = {0};
+    size_t wlen;
+    if (is_in) {
+        unsigned long len;
+        if (!enif_get_ulong(env, argv[5], &len) || len > CTRL_MAX_LEN)
+            return enif_make_badarg(env);
+        wlen = (size_t)len;
+    } else {
+        if (!enif_inspect_iolist_as_binary(env, argv[5], &out_data) ||
+            out_data.size > CTRL_MAX_LEN)
+            return enif_make_badarg(env);
+        wlen = out_data.size;
+    }
+
+    // One stable buffer, exactly wLength; the kernel never writes past it.
+    unsigned char *buf = NULL;
+    if (wlen) {
+        buf = enif_alloc(wlen);
+        if (!buf)
+            return err_tuple(env, ENOMEM);
+        if (!is_in)
+            memcpy(buf, out_data.data, wlen);
+    }
+
+    struct usbdevfs_ctrltransfer ctrl;
+    memset(&ctrl, 0, sizeof(ctrl));
+    ctrl.bRequestType = (uint8_t)rtype;
+    ctrl.bRequest = (uint8_t)req;
+    ctrl.wValue = (uint16_t)wvalue;
+    ctrl.wIndex = (uint16_t)windex;
+    ctrl.wLength = (uint16_t)wlen;
+    ctrl.timeout = timeout;
+    ctrl.data = buf; // pointer fixup: real address at the known offset
+
+    int n, e = 0;
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        enif_free(buf);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    n = ioctl(r->fd, USBDEVFS_CONTROL, &ctrl);
+    e = errno;
+    enif_mutex_unlock(r->lock);
+
+    if (n < 0) {
+        enif_free(buf);
+        return err_tuple(env, e);
+    }
+
+    ERL_NIF_TERM result;
+    if (is_in) {
+        ErlNifBinary rb;
+        if (!enif_alloc_binary((size_t)n, &rb)) {
+            enif_free(buf);
+            return err_tuple(env, ENOMEM);
+        }
+        if (n > 0)
+            memcpy(rb.data, buf, (size_t)n);
+        result = enif_make_tuple2(env, am_ok, enif_make_binary(env, &rb));
+    } else {
+        result = enif_make_tuple2(env, am_ok, enif_make_ulong(env, (unsigned long)n));
+    }
+    enif_free(buf);
+    return result;
+}
+
+// set_interface(handle, interface, altsetting) -> :ok | {:error, atom}
+// USBDEVFS_SETINTERFACE; no data buffer, but it drives a SET_INTERFACE request
+// to the device, so it can block -> dirty I/O scheduler.
+static ERL_NIF_TERM nif_set_interface(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    unsigned iface, alt;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_uint(env, argv[1], &iface) ||
+        !enif_get_uint(env, argv[2], &alt))
+        return enif_make_badarg(env);
+
+    struct usbdevfs_setinterface si;
+    memset(&si, 0, sizeof(si));
+    si.interface = iface;
+    si.altsetting = alt;
+
+    int rc, e = 0;
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    rc = ioctl(r->fd, USBDEVFS_SETINTERFACE, &si);
+    e = errno;
+    enif_mutex_unlock(r->lock);
+
+    if (rc < 0)
+        return err_tuple(env, e);
+    return am_ok;
+}
+
 // fileno(handle) -> integer | {:error, :ebadf}   (debug aid; verifies no leak)
 static ERL_NIF_TERM nif_fileno(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
@@ -300,6 +442,10 @@ static ErlNifFunc nif_funcs[] = {
     {"read", 2, nif_read, 0},
     {"write", 2, nif_write, 0},
     {"fileno", 1, nif_fileno, 0},
+    // Blocking usbfs ioctls run on a dirty I/O scheduler (correctness-first,
+    // per B4; the async select/reap engine in B5 supersedes the blocking path).
+    {"control_transfer", 7, nif_control_transfer, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"set_interface", 3, nif_set_interface, ERL_NIF_DIRTY_JOB_IO_BOUND},
 };
 
 ERL_NIF_INIT(Elixir.CircuitsUsb.Shim, nif_funcs, load, NULL, NULL, NULL)

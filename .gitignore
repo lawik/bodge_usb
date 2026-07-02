@@ -22,3 +22,20 @@ erl_crash.dump
 # Ignore package tarball (built via "mix hex.build").
 circuits_usb-*.tar
 
+# Part A harness build products and fetched upstream sources.
+harness/artifacts/
+harness/modules/dummy_hcd/dummy_hcd.c
+harness/tools/testusb/testusb.c
+harness/raw_gadget/a3_device
+harness/tools/testusb/testusb
+# Kbuild leftovers for the out-of-tree dummy_hcd module.
+harness/modules/dummy_hcd/*.o
+harness/modules/dummy_hcd/*.ko
+harness/modules/dummy_hcd/*.mod
+harness/modules/dummy_hcd/*.mod.c
+harness/modules/dummy_hcd/*.cmd
+harness/modules/dummy_hcd/.*.cmd
+harness/modules/dummy_hcd/Module.symvers
+harness/modules/dummy_hcd/modules.order
+harness/modules/dummy_hcd/.tmp_versions/
+

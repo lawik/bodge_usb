@@ -1,0 +1,59 @@
+name: usb-harness
+
+# Part A test harness (PROJECT.md A5): build the out-of-tree dummy_hcd, then run
+# A1..A4 headless and privileged, retaining logs and usbmon traces as artifacts.
+#
+# Privileged kernel work (insmod, configfs, raw-gadget, usbmon) needs a runner
+# whose kernel ships the gadget modules (raw_gadget, g_zero, usbtest,
+# libcomposite, usb_f_acm, udc-core) and allows module loading. GitHub-hosted
+# Ubuntu runners usually can once linux-modules-extra is installed; if a module
+# is missing the affected stage fails loudly. Use a self-hosted privileged
+# runner for a guaranteed environment by overriding `runner` on dispatch.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Runner label to use"
+        default: "ubuntu-latest"
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: ${{ github.event.inputs.runner || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + kernel module deps
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl kmod usbutils \
+            "linux-headers-$(uname -r)" \
+            "linux-modules-extra-$(uname -r)"
+
+      - name: Build harness (dummy_hcd.ko, testusb, a3_device)
+        run: make -C harness build
+
+      - name: Preflight (module availability)
+        run: |
+          set -eux
+          for m in raw_gadget g_zero usbtest libcomposite usb_f_acm udc_core usbmon; do
+            modinfo "$m" >/dev/null 2>&1 || echo "WARNING: module $m not found on this kernel"
+          done
+
+      - name: Run A1..A4
+        run: sudo --preserve-env=DUMMY_HCD_REF make -C harness all
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harness-artifacts
+          path: harness/artifacts/**
+          if-no-files-found: warn

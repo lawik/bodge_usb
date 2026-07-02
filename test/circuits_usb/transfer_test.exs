@@ -36,6 +36,60 @@ defmodule CircuitsUsb.TransferTest do
     end
   end
 
+  describe "raw async submit/select/reap against gadget zero" do
+    @tag :usbfs
+    test "a bulk IN URB completes via select + reap" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, dev} = Enumeration.read_descriptors(node)
+      {iface, ep_in, _ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
+
+      {:ok, h} = Shim.open(node, [:rdwr])
+
+      try do
+        :ok = Shim.claim_interface(h, iface)
+        ref = make_ref()
+        assert :ok = Shim.submit_bulk(h, 42, ep_in, 4096)
+        assert :ok = Shim.select(h, ref)
+
+        assert_receive {:select, _handle, ^ref, :ready_output}, 2000
+
+        assert [{42, :ok, data}] = Shim.reap(h)
+        assert byte_size(data) == 4096
+      after
+        Shim.release_interface(h, iface)
+        Shim.close(h)
+      end
+    end
+
+    @tag :usbfs
+    test "an in-flight bulk URB can be cancelled with discard" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, dev} = Enumeration.read_descriptors(node)
+      {iface, ep_in, _ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
+
+      {:ok, h} = Shim.open(node, [:rdwr])
+
+      try do
+        :ok = Shim.claim_interface(h, iface)
+        ref = make_ref()
+
+        # A 1 MB read is in flight for ~40ms; cancel it right after submit.
+        assert :ok = Shim.submit_bulk(h, 7, ep_in, 1_048_576)
+        assert :ok = Shim.discard(h, 7)
+        assert :ok = Shim.select(h, ref)
+
+        assert_receive {:select, _handle, ^ref, :ready_output}, 2000
+
+        # The cancelled URB is delivered with a non-:ok (reset) status.
+        assert [{7, status, _payload}] = Shim.reap(h)
+        assert status != :ok
+      after
+        Shim.release_interface(h, iface)
+        Shim.close(h)
+      end
+    end
+  end
+
   # First interface exposing both a bulk IN and a bulk OUT endpoint.
   defp find_bulk_pair(dev) do
     Enum.find_value(dev.configurations, fn c ->

@@ -13,8 +13,6 @@ defmodule CircuitsUsb.Descriptor do
   `bLength`, ...).
   """
 
-  import Bitwise
-
   # Standard descriptor type codes (USB 2.0 table 9-5).
   @dt_device 0x01
   @dt_configuration 0x02
@@ -346,11 +344,16 @@ defmodule CircuitsUsb.Descriptor do
   defp parse_endpoint(%{
          data: <<_bl, _bt, address, attributes, max_packet::little-16, interval, _::binary>>
        }) do
+    # bEndpointAddress: bit 7 direction, bits 6-4 reserved, bits 3-0 number.
+    <<dir::1, _reserved::3, number::4>> = <<address>>
+    # bmAttributes: bits 1-0 are the transfer type.
+    <<_::6, xfer::2>> = <<attributes>>
+
     %Endpoint{
       address: address,
-      number: address &&& 0x0F,
-      direction: if((address &&& 0x80) != 0, do: :in, else: :out),
-      transfer_type: elem({:control, :isochronous, :bulk, :interrupt}, attributes &&& 0x03),
+      number: number,
+      direction: if(dir == 1, do: :in, else: :out),
+      transfer_type: elem({:control, :isochronous, :bulk, :interrupt}, xfer),
       max_packet_size: max_packet,
       interval: interval
     }

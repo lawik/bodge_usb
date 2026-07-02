@@ -7,7 +7,6 @@ defmodule CircuitsUsb.Enumeration do
   each device carries either `{:ok, %Device{}}` or `{:error, reason}`.
   """
 
-  import Bitwise
   alias CircuitsUsb.{Descriptor, Shim}
 
   @usbfs_root "/dev/bus/usb"
@@ -69,8 +68,11 @@ defmodule CircuitsUsb.Enumeration do
   def string(_handle, 0, _langid), do: {:error, :no_string}
 
   def string(handle, index, langid) when index in 1..255 do
-    # GET_DESCRIPTOR(String, index): wValue = 0x0300 | index, wIndex = langid.
-    case Shim.control_in(handle, 0x06, 0x0300 ||| index, langid, 255, 1000) do
+    # GET_DESCRIPTOR(String, index): wValue = STRING type (0x03) in the high byte,
+    # index in the low byte; wIndex = langid.
+    <<wvalue::16>> = <<0x03, index>>
+
+    case Shim.control_in(handle, 0x06, wvalue, langid, 255, 1000) do
       {:ok, <<_len, 0x03, _::binary>> = bytes} -> Descriptor.decode_string(bytes)
       {:ok, _} -> {:error, :not_a_string_descriptor}
       {:error, _} = err -> err

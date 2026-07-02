@@ -165,6 +165,30 @@ defmodule CircuitsUsb.ShimTest do
     end
   end
 
+  describe "async primitives (no device needed)" do
+    test "submit_bulk reaches the kernel (ENOTTY on /dev/null)" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert {:error, :enotty} = Shim.submit_bulk(h, 1, 0x81, 64)
+      Shim.close(h)
+    end
+
+    test "discard of an unknown tag is :enoent; reap of an idle fd is empty" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert {:error, :enoent} = Shim.discard(h, 12_345)
+      assert [] = Shim.reap(h)
+      Shim.close(h)
+    end
+
+    test "async ops on a closed handle return :ebadf / empty" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      :ok = Shim.close(h)
+      assert {:error, :ebadf} = Shim.submit_bulk(h, 1, 0x81, 64)
+      assert {:error, :ebadf} = Shim.discard(h, 1)
+      assert {:error, :ebadf} = Shim.select(h, make_ref())
+      assert [] = Shim.reap(h)
+    end
+  end
+
   # Integration against a real usbfs node (Part A A1). Set CIRCUITS_USB_TEST_NODE
   # to e.g. /dev/bus/usb/001/002. usbfs read() returns the cached descriptors;
   # the first 18 bytes are the device descriptor (bLength=18, bDescriptorType=1).

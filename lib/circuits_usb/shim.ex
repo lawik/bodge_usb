@@ -16,8 +16,6 @@ defmodule CircuitsUsb.Shim do
   for errnos without a dedicated name.
   """
 
-  import Bitwise
-
   @typedoc "An open file-descriptor handle (a NIF resource)."
   @opaque handle :: reference()
 
@@ -123,17 +121,17 @@ defmodule CircuitsUsb.Shim do
   def bulk_transfer(_h, _endpoint, _data_or_length, _timeout_ms),
     do: :erlang.nif_error(:nif_not_loaded)
 
-  @doc "Bulk IN transfer. Returns `{:ok, binary}` of up to `length` bytes."
+  @doc "Bulk IN transfer on an IN endpoint address (bit 7 set). Returns `{:ok, binary}`."
   @spec bulk_in(handle(), 0..255, non_neg_integer(), non_neg_integer()) ::
           {:ok, binary()} | {:error, atom()}
   def bulk_in(h, endpoint, length, timeout_ms \\ 1000),
-    do: bulk_transfer(h, endpoint ||| 0x80, length, timeout_ms)
+    do: bulk_transfer(h, endpoint, length, timeout_ms)
 
-  @doc "Bulk OUT transfer. Returns `{:ok, bytes_written}`."
+  @doc "Bulk OUT transfer on an OUT endpoint address (bit 7 clear). Returns `{:ok, bytes_written}`."
   @spec bulk_out(handle(), 0..255, iodata(), non_neg_integer()) ::
           {:ok, non_neg_integer()} | {:error, atom()}
   def bulk_out(h, endpoint, data, timeout_ms \\ 1000),
-    do: bulk_transfer(h, endpoint &&& 0x7F, data, timeout_ms)
+    do: bulk_transfer(h, endpoint, data, timeout_ms)
 
   @doc """
   Claim an interface (`USBDEVFS_CLAIMINTERFACE`) so its endpoints can be used
@@ -152,6 +150,41 @@ defmodule CircuitsUsb.Shim do
   """
   @spec set_interface(handle(), non_neg_integer(), non_neg_integer()) :: :ok | {:error, atom()}
   def set_interface(_h, _interface, _altsetting), do: :erlang.nif_error(:nif_not_loaded)
+
+  # ---- async engine primitives (B5) --------------------------------------
+
+  @doc """
+  Submit a bulk URB asynchronously (`USBDEVFS_SUBMITURB`). Returns immediately.
+  `tag` is a caller-chosen 64-bit id echoed back by `reap/1`. Direction is bit 7
+  of `endpoint`; IN takes a length, OUT takes iodata. The interface must be
+  claimed. Pair with `select/2` + `reap/1` to collect the completion.
+  """
+  @spec submit_bulk(handle(), non_neg_integer(), 0..255, iodata() | non_neg_integer()) ::
+          :ok | {:error, atom()}
+  def submit_bulk(_h, _tag, _endpoint, _data_or_length), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Arm readiness notification: usbfs signals `POLLOUT` when a URB is reapable.
+  The calling process receives `{:select, handle, ref, :ready_output}`. Re-arm
+  after each `reap/1` while URBs remain in flight.
+  """
+  @spec select(handle(), reference()) :: :ok | {:error, atom()}
+  def select(_h, _ref), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Drain all currently-completed URBs (`USBDEVFS_REAPURBNDELAY`). Returns a list
+  of `{tag, status, payload}` where `status` is `:ok` or an errno atom, and
+  `payload` is the received binary (IN) or bytes written (OUT).
+  """
+  @spec reap(handle()) :: [{non_neg_integer(), :ok | atom(), binary() | non_neg_integer()}]
+  def reap(_h), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Cancel an in-flight URB by `tag` (`USBDEVFS_DISCARDURB`). It still completes
+  (with a reset status) and is returned by the next `reap/1`.
+  """
+  @spec discard(handle(), non_neg_integer()) :: :ok | {:error, atom()}
+  def discard(_h, _tag), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   The underlying integer fd, or `{:error, :ebadf}` if closed. Diagnostic aid

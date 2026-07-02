@@ -28,9 +28,26 @@
 
 // ---- resource type -------------------------------------------------------
 
+// An in-flight async URB. `kurb` MUST be the first member: USBDEVFS_REAPURBNDELAY
+// hands back the exact pointer we submitted (&urb->kurb), which we cast straight
+// back to Urb*. The kurb and its buffer must stay put until the URB is reaped or
+// the fd is closed, so they live in enif_alloc memory tracked on the owning fd.
+typedef struct Urb {
+    struct usbdevfs_urb kurb;
+    unsigned char *buffer;
+    size_t buffer_len;
+    int is_in;
+    ErlNifUInt64 tag; // caller correlation id
+    struct Urb *next;
+    struct Urb *prev;
+} Urb;
+
 typedef struct {
-    int fd;                 // -1 once closed
-    ErlNifMutex *lock;      // serializes fd use vs close (no double-close/UAF)
+    int fd;             // -1 once closed
+    ErlNifMutex *lock;  // serializes fd use vs close (no double-close/UAF)
+    Urb *inflight;      // doubly-linked list of submitted-but-unreaped URBs
+    int select_active;  // enif_select(WRITE) currently armed
+    int closing;        // close requested; fd torn down in the stop callback
 } UsbFd;
 
 static ErlNifResourceType *usb_fd_type = NULL;
@@ -39,6 +56,48 @@ static ErlNifResourceType *usb_fd_type = NULL;
 static ERL_NIF_TERM am_ok;
 static ERL_NIF_TERM am_error;
 static ERL_NIF_TERM am_ebadf;
+
+// ---- URB registry helpers (call with r->lock held) ---------------------
+
+static void urb_link(UsbFd *r, Urb *u) {
+    u->prev = NULL;
+    u->next = r->inflight;
+    if (r->inflight)
+        r->inflight->prev = u;
+    r->inflight = u;
+}
+
+static void urb_unlink(UsbFd *r, Urb *u) {
+    if (u->prev)
+        u->prev->next = u->next;
+    else
+        r->inflight = u->next;
+    if (u->next)
+        u->next->prev = u->prev;
+}
+
+static void urb_free(Urb *u) {
+    if (u->buffer)
+        enif_free(u->buffer);
+    enif_free(u);
+}
+
+// Close the fd and drop all tracked URBs. Closing the usbfs fd cancels every
+// kernel URB, so the kernel no longer references our Urb memory afterward and it
+// is safe to free. Call with r->lock held.
+static void teardown_fd(UsbFd *r) {
+    if (r->fd >= 0) {
+        close(r->fd);
+        r->fd = -1;
+    }
+    Urb *u = r->inflight;
+    while (u) {
+        Urb *n = u->next;
+        urb_free(u);
+        u = n;
+    }
+    r->inflight = NULL;
+}
 
 static ERL_NIF_TERM mk_atom(ErlNifEnv *env, const char *s) {
     ERL_NIF_TERM a;
@@ -90,14 +149,27 @@ static ERL_NIF_TERM err_tuple(ErlNifEnv *env, int e) {
     return enif_make_tuple2(env, am_error, errno_atom(env, e));
 }
 
+// enif_select stop callback: runs when it is safe to close the fd (no in-flight
+// select). This is where an fd that was ever selected upon is actually closed.
+static void usb_fd_stop(ErlNifEnv *env, void *obj, ErlNifEvent event, int is_direct_call) {
+    (void)env;
+    (void)event;
+    (void)is_direct_call;
+    UsbFd *r = (UsbFd *)obj;
+    enif_mutex_lock(r->lock);
+    r->select_active = 0;
+    teardown_fd(r);
+    enif_mutex_unlock(r->lock);
+}
+
 static void usb_fd_dtor(ErlNifEnv *env, void *obj) {
     (void)env;
     UsbFd *r = (UsbFd *)obj;
-    // GC: no other references remain, so no locking is needed, but guard anyway.
-    if (r->fd >= 0) {
-        close(r->fd);
-        r->fd = -1;
-    }
+    // If the fd was ever selected upon, the stop callback already tore it down
+    // (enif_select keeps the resource alive until STOP completes, so stop runs
+    // before dtor). Otherwise close it here. No other references remain.
+    if (r->fd >= 0)
+        teardown_fd(r);
     if (r->lock) {
         enif_mutex_destroy(r->lock);
         r->lock = NULL;
@@ -172,6 +244,9 @@ static ERL_NIF_TERM nif_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
         return err_tuple(env, ENOMEM);
     }
     r->fd = fd;
+    r->inflight = NULL;
+    r->select_active = 0;
+    r->closing = 0;
     r->lock = enif_mutex_create("circuits_usb_fd");
     if (!r->lock) {
         close(fd);
@@ -186,19 +261,47 @@ static ERL_NIF_TERM nif_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
 }
 
 // close(handle) -> :ok | {:error, atom}   (idempotent)
+//
+// If the fd was ever armed for select, tear it down via ERL_NIF_SELECT_STOP so
+// the fd is removed from the poller before close() -- an in-flight select over a
+// closed fd is a bug class. The actual close + URB cleanup happens in the stop
+// callback. Otherwise close inline.
 static ERL_NIF_TERM nif_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
     UsbFd *r;
     if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r))
         return enif_make_badarg(env);
 
-    int rc = 0, e = 0;
     enif_mutex_lock(r->lock);
-    if (r->fd >= 0) {
-        rc = close(r->fd);
-        e = errno;
-        r->fd = -1; // never retry a closed fd, even if close() reported an error
+    if (r->closing || r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        return am_ok;
     }
+    r->closing = 1;
+    int select_active = r->select_active;
+    int fd = r->fd;
+
+    if (select_active) {
+        // Release the lock BEFORE enif_select(STOP): the stop callback may run
+        // synchronously in this thread and it takes r->lock -- holding it here
+        // would deadlock. `closing` already blocks any concurrent re-entry, and
+        // usb_fd_stop() does the actual close + URB teardown under the lock.
+        enif_mutex_unlock(r->lock);
+        enif_select(env, (ErlNifEvent)fd, ERL_NIF_SELECT_STOP, r, NULL,
+                    enif_make_atom(env, "undefined"));
+        return am_ok;
+    }
+
+    int rc = close(fd);
+    int e = errno;
+    r->fd = -1;
+    Urb *u = r->inflight;
+    while (u) {
+        Urb *n = u->next;
+        urb_free(u);
+        u = n;
+    }
+    r->inflight = NULL;
     enif_mutex_unlock(r->lock);
 
     if (rc != 0)
@@ -525,6 +628,192 @@ static ERL_NIF_TERM nif_release_interface(ErlNifEnv *env, int argc, const ERL_NI
     return uint_ioctl(env, argv, USBDEVFS_RELEASEINTERFACE);
 }
 
+// ---- async engine: submit / select / reap / discard (B5) ---------------
+
+// A completed URB's status: 0 -> :ok, negative -> errno atom of its magnitude.
+static ERL_NIF_TERM urb_status_term(ErlNifEnv *env, int status) {
+    if (status == 0)
+        return am_ok;
+    return errno_atom(env, status < 0 ? -status : status);
+}
+
+// submit_bulk(handle, tag :: u64, endpoint, data_or_length) -> :ok | {:error, atom}
+// Fast, non-blocking SUBMITURB: hands a bulk URB to the kernel and returns
+// immediately. The URB (and its buffer) are tracked on the fd until reaped.
+static ERL_NIF_TERM nif_submit_bulk(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    ErlNifUInt64 tag;
+    unsigned ep;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_uint64(env, argv[1], &tag) ||
+        !get_bounded(env, argv[2], 0xFF, &ep))
+        return enif_make_badarg(env);
+
+    int is_in = (ep & 0x80) != 0;
+
+    ErlNifBinary out_data = {0};
+    size_t len;
+    if (is_in) {
+        unsigned long n;
+        if (!enif_get_ulong(env, argv[3], &n) || n > BULK_MAX_LEN)
+            return enif_make_badarg(env);
+        len = (size_t)n;
+    } else {
+        if (!enif_inspect_iolist_as_binary(env, argv[3], &out_data) ||
+            out_data.size > BULK_MAX_LEN)
+            return enif_make_badarg(env);
+        len = out_data.size;
+    }
+
+    Urb *u = enif_alloc(sizeof(Urb));
+    if (!u)
+        return err_tuple(env, ENOMEM);
+    memset(u, 0, sizeof(*u));
+    u->buffer_len = len;
+    u->is_in = is_in;
+    u->tag = tag;
+    if (len) {
+        u->buffer = enif_alloc(len);
+        if (!u->buffer) {
+            enif_free(u);
+            return err_tuple(env, ENOMEM);
+        }
+        if (!is_in)
+            memcpy(u->buffer, out_data.data, len);
+    }
+    u->kurb.type = USBDEVFS_URB_TYPE_BULK;
+    u->kurb.endpoint = (unsigned char)ep;
+    u->kurb.buffer = u->buffer;
+    u->kurb.buffer_length = (int)len;
+    u->kurb.usercontext = u;
+
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        urb_free(u);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    int rc = ioctl(r->fd, USBDEVFS_SUBMITURB, &u->kurb);
+    int e = errno;
+    if (rc < 0) {
+        enif_mutex_unlock(r->lock);
+        urb_free(u);
+        return err_tuple(env, e);
+    }
+    urb_link(r, u);
+    enif_mutex_unlock(r->lock);
+    return am_ok;
+}
+
+// select(handle, ref) -> :ok | {:error, atom}
+// Arm enif_select for write-readiness: usbfs reports POLLOUT when a URB is
+// reapable. The calling process gets `{:select, handle, ref, :ready_output}`.
+static ERL_NIF_TERM nif_select(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r))
+        return enif_make_badarg(env);
+
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0 || r->closing) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    int rc = enif_select(env, (ErlNifEvent)r->fd, ERL_NIF_SELECT_WRITE, r, NULL, argv[1]);
+    if (rc >= 0)
+        r->select_active = 1;
+    enif_mutex_unlock(r->lock);
+
+    if (rc < 0)
+        return enif_make_tuple2(env, am_error, enif_make_atom(env, "eselect"));
+    return am_ok;
+}
+
+// reap(handle) -> [{tag :: u64, status :: :ok | atom, data_or_actual_length}]
+// Drains all currently-completed URBs with the non-blocking REAPURBNDELAY. For
+// IN URBs the third element is the received binary; for OUT it is the actual
+// length written. Runs inline (each reap is non-blocking).
+static ERL_NIF_TERM nif_reap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r))
+        return enif_make_badarg(env);
+
+    ERL_NIF_TERM list = enif_make_list(env, 0);
+
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        return list;
+    }
+    for (;;) {
+        struct usbdevfs_urb *ku = NULL;
+        int rc = ioctl(r->fd, USBDEVFS_REAPURBNDELAY, &ku);
+        if (rc < 0)
+            break; // EAGAIN (none ready) or a terminal error; stop draining
+        Urb *u = (Urb *)ku; // kurb is the first member
+
+        ERL_NIF_TERM payload;
+        if (u->is_in) {
+            size_t got = u->kurb.actual_length > 0 ? (size_t)u->kurb.actual_length : 0;
+            ErlNifBinary b;
+            if (!enif_alloc_binary(got, &b)) {
+                // Drop this completion's data but keep draining/cleanup.
+                payload = enif_make_int(env, u->kurb.actual_length);
+            } else {
+                if (got)
+                    memcpy(b.data, u->buffer, got);
+                payload = enif_make_binary(env, &b);
+            }
+        } else {
+            payload = enif_make_int(env, u->kurb.actual_length);
+        }
+
+        ERL_NIF_TERM entry = enif_make_tuple3(
+            env, enif_make_uint64(env, u->tag), urb_status_term(env, u->kurb.status), payload);
+        list = enif_make_list_cell(env, entry, list);
+
+        urb_unlink(r, u);
+        urb_free(u);
+    }
+    enif_mutex_unlock(r->lock);
+    return list;
+}
+
+// discard(handle, tag) -> :ok | {:error, :enoent} | {:error, atom}
+// Cancel an in-flight URB. It still completes (with an ECONNRESET status) and is
+// delivered by the next reap, which is where its memory is reclaimed.
+static ERL_NIF_TERM nif_discard(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    ErlNifUInt64 tag;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_uint64(env, argv[1], &tag))
+        return enif_make_badarg(env);
+
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    Urb *u = r->inflight;
+    while (u && u->tag != tag)
+        u = u->next;
+    if (!u) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, enif_make_atom(env, "enoent"));
+    }
+    int rc = ioctl(r->fd, USBDEVFS_DISCARDURB, &u->kurb);
+    int e = errno;
+    enif_mutex_unlock(r->lock);
+
+    // ENOENT/EINVAL here just means it already completed; treat as success.
+    if (rc < 0 && e != ENOENT && e != EINVAL)
+        return err_tuple(env, e);
+    return am_ok;
+}
+
 // fileno(handle) -> integer | {:error, :ebadf}   (debug aid; verifies no leak)
 static ERL_NIF_TERM nif_fileno(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
@@ -546,10 +835,12 @@ static int load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info) {
     (void)priv_data;
     (void)load_info;
     ErlNifResourceFlags tried;
-    usb_fd_type = enif_open_resource_type(env, NULL, "circuits_usb_fd",
-                                          usb_fd_dtor,
-                                          ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER,
-                                          &tried);
+    ErlNifResourceTypeInit init = {0};
+    init.dtor = usb_fd_dtor;
+    init.stop = usb_fd_stop; // needed for enif_select teardown (B5)
+    usb_fd_type = enif_open_resource_type_x(env, "circuits_usb_fd", &init,
+                                            ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER,
+                                            &tried);
     if (!usb_fd_type)
         return -1;
 
@@ -573,6 +864,11 @@ static ErlNifFunc nif_funcs[] = {
     // claim/release are fast fd bookkeeping ops -> normal scheduler.
     {"claim_interface", 2, nif_claim_interface, 0},
     {"release_interface", 2, nif_release_interface, 0},
+    // async engine: all non-blocking, run inline on a normal scheduler.
+    {"submit_bulk", 4, nif_submit_bulk, 0},
+    {"select", 2, nif_select, 0},
+    {"reap", 1, nif_reap, 0},
+    {"discard", 2, nif_discard, 0},
 };
 
 ERL_NIF_INIT(Elixir.CircuitsUsb.Shim, nif_funcs, load, NULL, NULL, NULL)

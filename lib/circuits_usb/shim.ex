@@ -261,7 +261,7 @@ defmodule CircuitsUsb.Shim do
   fields); `select_read/2` signals read-readiness. Usually needs root.
   """
   @spec netlink_uevent_open() :: {:ok, handle()} | {:error, atom()}
-  def netlink_uevent_open, do: :erlang.nif_error(:nif_not_loaded)
+  def netlink_uevent_open(), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Arm read-readiness (`POLLIN`) notification on a handle (e.g. the uevent

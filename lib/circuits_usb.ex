@@ -83,26 +83,38 @@ defmodule CircuitsUsb do
   defdelegate reset(device), to: Transfer
 
   @doc "Bulk IN transfer. See `CircuitsUsb.Transfer.bulk_in/4`."
+  @spec bulk_in(device(), 0..255, non_neg_integer(), timeout()) ::
+          {:ok, binary()} | {:error, term()}
   def bulk_in(device, endpoint, length, timeout \\ 1000),
     do: Transfer.bulk_in(device, endpoint, length, timeout)
 
   @doc "Bulk OUT transfer. See `CircuitsUsb.Transfer.bulk_out/4`."
+  @spec bulk_out(device(), 0..255, iodata(), timeout()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
   def bulk_out(device, endpoint, data, timeout \\ 1000),
     do: Transfer.bulk_out(device, endpoint, data, timeout)
 
   @doc "Interrupt IN transfer. See `CircuitsUsb.Transfer.interrupt_in/4`."
+  @spec interrupt_in(device(), 0..255, non_neg_integer(), timeout()) ::
+          {:ok, binary()} | {:error, term()}
   def interrupt_in(device, endpoint, length, timeout \\ 1000),
     do: Transfer.interrupt_in(device, endpoint, length, timeout)
 
   @doc "Interrupt OUT transfer. See `CircuitsUsb.Transfer.interrupt_out/4`."
+  @spec interrupt_out(device(), 0..255, iodata(), timeout()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
   def interrupt_out(device, endpoint, data, timeout \\ 1000),
     do: Transfer.interrupt_out(device, endpoint, data, timeout)
 
   @doc "Control IN transfer. See `CircuitsUsb.Transfer.control_in/6`."
+  @spec control_in(device(), 0..255, 0..0xFFFF, 0..0xFFFF, non_neg_integer(), timeout()) ::
+          {:ok, binary()} | {:error, atom()}
   def control_in(device, request, value, index, length, timeout \\ 1000),
     do: Transfer.control_in(device, request, value, index, length, timeout)
 
   @doc "Control OUT transfer. See `CircuitsUsb.Transfer.control_out/6`."
+  @spec control_out(device(), 0..255, 0..0xFFFF, 0..0xFFFF, iodata(), timeout()) ::
+          {:ok, non_neg_integer()} | {:error, atom()}
   def control_out(device, request, value, index, data, timeout \\ 1000),
     do: Transfer.control_out(device, request, value, index, data, timeout)
 

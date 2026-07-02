@@ -105,6 +105,7 @@ defmodule CircuitsUsb.Hotplug do
 
   @doc false
   # A uevent datagram is a header line then NUL-separated key=value fields.
+  @spec parse_uevent(binary()) :: {:ok, event()} | :skip
   def parse_uevent(data) do
     fields =
       data

@@ -33,7 +33,7 @@ run_mix mix deps.get
 run_mix mix compile
 
 echo "== host-safe shim tests (in guest) =="
-run_mix mix test --exclude usbfs
+run_mix mix test --exclude usbfs --exclude usbfs_driver
 
 echo "== bring up a usbfs node (dummy_hcd + g_zero) =="
 busnum="$("$HARNESS/scripts/load-dummy.sh")"
@@ -55,11 +55,19 @@ done
 [ -n "$node" ] || { echo "ERROR: no gadget-zero node appeared"; exit 1; }
 echo "usbfs node: $node"
 
-# udev auto-loads usbtest (its modalias matches gadget zero) and it claims the
-# interface, which would block our own claim_interface with EBUSY. Kernel-driver
-# detach is B6; until then, free the interface at the harness level. Control and
-# descriptor tests don't need the interface, so removing usbtest is safe.
+# Phase A -- driver detach/reattach (B6) needs a stock driver bound. udev
+# auto-loads usbtest (its modalias matches gadget zero) and binds it; make sure.
 command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null || true
+modprobe usbtest 2>/dev/null || true
+for _ in $(seq 1 30); do
+  ls /sys/bus/usb/drivers/usbtest/*:* >/dev/null 2>&1 && break
+  sleep 0.1
+done
+echo "== :usbfs_driver tests (usbtest bound) =="
+CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only usbfs_driver
+
+# Phase B -- bulk/async tests need the interface free, so drop usbtest (whose
+# claim on the interface would otherwise block our claim_interface with EBUSY).
 modprobe -r usbtest 2>/dev/null || rmmod usbtest 2>/dev/null || true
 
 echo "== :usbfs integration test =="

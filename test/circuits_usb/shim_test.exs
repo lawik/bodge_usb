@@ -165,6 +165,24 @@ defmodule CircuitsUsb.ShimTest do
     end
   end
 
+  describe "driver detach ioctls (no device needed)" do
+    test "get_driver/detach/attach reach the kernel (ENOTTY on /dev/null)" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert {:error, :enotty} = Shim.get_driver(h, 0)
+      assert {:error, :enotty} = Shim.detach_driver(h, 0)
+      assert {:error, :enotty} = Shim.attach_driver(h, 0)
+      Shim.close(h)
+    end
+
+    test "bad args are badarg; closed handle is :ebadf" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert_raise ArgumentError, fn -> Shim.get_driver(h, :nope) end
+      assert_raise ArgumentError, fn -> Shim.detach_driver(:nope, 0) end
+      :ok = Shim.close(h)
+      assert {:error, :ebadf} = Shim.get_driver(h, 0)
+    end
+  end
+
   describe "async primitives (no device needed)" do
     test "submit_bulk reaches the kernel (ENOTTY on /dev/null)" do
       {:ok, h} = Shim.open("/dev/null", [:rdwr])

@@ -133,6 +133,9 @@ static ERL_NIF_TERM errno_atom(ErlNifEnv *env, int e) {
     case ESHUTDOWN:  name = "eshutdown"; break;
     case EPROTO:     name = "eproto"; break;
     case EILSEQ:     name = "eilseq"; break;
+    case ENODATA:    name = "enodata"; break;   // GETDRIVER: no driver bound
+    case ETIME:      name = "etime"; break;      // USB isoc/interrupt timeout
+    case EREMOTEIO:  name = "eremoteio"; break;  // USB short read
     case ENOSYS:     name = "enosys"; break;
     case EMFILE:     name = "emfile"; break;
     case ENFILE:     name = "enfile"; break;
@@ -628,6 +631,86 @@ static ERL_NIF_TERM nif_release_interface(ErlNifEnv *env, int argc, const ERL_NI
     return uint_ioctl(env, argv, USBDEVFS_RELEASEINTERFACE);
 }
 
+// ---- kernel driver detach/reattach (B6) --------------------------------
+
+// get_driver(handle, interface) -> {:ok, name} | {:error, atom}
+// Name of the kernel driver bound to the interface, or :enodata if none.
+static ERL_NIF_TERM nif_get_driver(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    unsigned iface;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_uint(env, argv[1], &iface))
+        return enif_make_badarg(env);
+
+    struct usbdevfs_getdriver gd;
+    memset(&gd, 0, sizeof(gd));
+    gd.interface = iface;
+
+    int rc, e = 0;
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    rc = ioctl(r->fd, USBDEVFS_GETDRIVER, &gd);
+    e = errno;
+    enif_mutex_unlock(r->lock);
+
+    if (rc < 0)
+        return err_tuple(env, e);
+
+    gd.driver[USBDEVFS_MAXDRIVERNAME] = '\0';
+    ERL_NIF_TERM name;
+    size_t len = strlen(gd.driver);
+    unsigned char *buf = enif_make_new_binary(env, len, &name);
+    memcpy(buf, gd.driver, len);
+    return enif_make_tuple2(env, am_ok, name);
+}
+
+// Wrap a nested usbfs ioctl (DISCONNECT/CONNECT) targeting an interface, sent
+// via USBDEVFS_IOCTL. Detach/attach drive the kernel driver's disconnect/probe,
+// so they can block -> dirty I/O.
+static ERL_NIF_TERM driver_ioctl(ErlNifEnv *env, const ERL_NIF_TERM argv[], int nested_code) {
+    UsbFd *r;
+    unsigned iface;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_uint(env, argv[1], &iface))
+        return enif_make_badarg(env);
+
+    struct usbdevfs_ioctl cmd;
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.ifno = (int)iface;
+    cmd.ioctl_code = nested_code;
+    cmd.data = NULL;
+
+    int rc, e = 0;
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    rc = ioctl(r->fd, USBDEVFS_IOCTL, &cmd);
+    e = errno;
+    enif_mutex_unlock(r->lock);
+
+    if (rc < 0)
+        return err_tuple(env, e);
+    return am_ok;
+}
+
+// detach_driver(handle, interface) -> :ok | {:error, atom}
+static ERL_NIF_TERM nif_detach_driver(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    return driver_ioctl(env, argv, USBDEVFS_DISCONNECT);
+}
+
+// attach_driver(handle, interface) -> :ok | {:error, atom}
+static ERL_NIF_TERM nif_attach_driver(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    return driver_ioctl(env, argv, USBDEVFS_CONNECT);
+}
+
 // ---- async engine: submit / select / reap / discard (B5) ---------------
 
 // A completed URB's status: 0 -> :ok, negative -> errno atom of its magnitude.
@@ -864,6 +947,10 @@ static ErlNifFunc nif_funcs[] = {
     // claim/release are fast fd bookkeeping ops -> normal scheduler.
     {"claim_interface", 2, nif_claim_interface, 0},
     {"release_interface", 2, nif_release_interface, 0},
+    // driver query is fast; detach/attach drive probe/disconnect -> dirty I/O.
+    {"get_driver", 2, nif_get_driver, 0},
+    {"detach_driver", 2, nif_detach_driver, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"attach_driver", 2, nif_attach_driver, ERL_NIF_DIRTY_JOB_IO_BOUND},
     // async engine: all non-blocking, run inline on a normal scheduler.
     {"submit_bulk", 4, nif_submit_bulk, 0},
     {"select", 2, nif_select, 0},

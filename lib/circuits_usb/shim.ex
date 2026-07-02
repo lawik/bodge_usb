@@ -145,6 +145,27 @@ defmodule CircuitsUsb.Shim do
   def release_interface(_h, _interface), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  Name of the kernel driver bound to an interface (`USBDEVFS_GETDRIVER`), or
+  `{:error, :enodata}` if none is bound.
+  """
+  @spec get_driver(handle(), non_neg_integer()) :: {:ok, binary()} | {:error, atom()}
+  def get_driver(_h, _interface), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Detach the kernel driver from an interface (`USBDEVFS_DISCONNECT` via
+  `USBDEVFS_IOCTL`) so it can be claimed. Runs on a dirty I/O scheduler.
+  """
+  @spec detach_driver(handle(), non_neg_integer()) :: :ok | {:error, atom()}
+  def detach_driver(_h, _interface), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Reattach the kernel driver to an interface (`USBDEVFS_CONNECT` via
+  `USBDEVFS_IOCTL`). Runs on a dirty I/O scheduler.
+  """
+  @spec attach_driver(handle(), non_neg_integer()) :: :ok | {:error, atom()}
+  def attach_driver(_h, _interface), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   Select an alternate setting for an interface (`USBDEVFS_SETINTERFACE`).
   Runs on a dirty I/O scheduler.
   """

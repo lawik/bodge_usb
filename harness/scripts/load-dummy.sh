@@ -18,6 +18,12 @@ build_and_load() {
     log "dummy_hcd already loaded"
     return 0
   fi
+  # Prefer an in-tree module if this kernel actually ships one.
+  if modinfo dummy_hcd >/dev/null 2>&1; then
+    log "loading in-tree dummy_hcd"
+    modprobe dummy_hcd && return 0
+  fi
+  # Otherwise build it out-of-tree against the running kernel's headers.
   # udc-core is a dependency; pull it in first (usually auto-loaded).
   modprobe_checked udc_core || modprobe_checked libcomposite || true
 
@@ -26,8 +32,7 @@ build_and_load() {
     make -C "$MODDIR" >&2
   fi
   log "inserting dummy_hcd.ko"
-  insmod "$MODDIR/dummy_hcd.ko" 2>/dev/null || modprobe dummy_hcd 2>/dev/null || \
-    die "failed to load dummy_hcd"
+  insmod "$MODDIR/dummy_hcd.ko" 2>/dev/null || die "failed to load dummy_hcd"
 }
 
 # The dummy_hcd root hub shows up as /sys/bus/usb/devices/usbN whose resolved

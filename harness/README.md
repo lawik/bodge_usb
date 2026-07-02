@@ -47,7 +47,29 @@ fetch.sh` pulls a `dummy_hcd.c` matching the running kernel's `major.minor`
 - `configfs` and `debugfs` (the scripts mount them if needed).
 - Root for every run stage (module load, usbfs/configfs/raw-gadget, usbmon).
 
-## Usage
+## Running in a VM (recommended)
+
+The privileged stages (module load, raw-gadget, device resets) are best run in a
+throwaway KVM VM: root without touching the host, and crash-isolated for when
+Part B's NIF starts oopsing kernels. `vm/vm.sh` manages an Ubuntu cloud-image VM
+with this repo shared in over virtio-9p. It builds and runs guest-local and
+writes artifacts back to `harness/artifacts/` on the host.
+
+```
+harness/vm/vm.sh up          # boot the VM (first run downloads the cloud image)
+harness/vm/vm.sh provision   # install headers, modules-extra, build tools (once)
+harness/vm/vm.sh run all     # sync + run A1..A4 in the VM, artifacts on the host
+harness/vm/vm.sh run a1      # a single stage (a1/a2/a3-run/a4)
+harness/vm/vm.sh ssh         # shell into the guest
+harness/vm/vm.sh down        # power off
+```
+
+VM state (image, disk overlay, ssh key) lives in
+`~/.local/share/circuits-usb-vm/`, outside the repo. Needs `qemu-system-x86_64`,
+`genisoimage`, and access to `/dev/kvm`. This is verified green on Ubuntu 24.04 /
+kernel 6.8 (22/22 cases).
+
+## Usage (directly, on a host you have root on)
 
 Build (no root):
 

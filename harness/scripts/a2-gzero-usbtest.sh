@@ -47,19 +47,28 @@ find_gzero() {
   return 1
 }
 
-# Is our device's interface 0 bound to the usbtest driver?
+# Is any interface of our device bound to the usbtest driver? Gadget Zero's
+# active config value is not necessarily 1 (it enumerates as e.g. 1-1:3.0), so
+# match on any interface rather than a hardcoded config number.
 usbtest_bound() {
-  local devname="$1" link
-  link="/sys/bus/usb/devices/${devname}:1.0/driver"
-  [ -L "$link" ] && [ "$(basename "$(readlink "$link")")" = "usbtest" ]
+  local devname="$1" i
+  for i in /sys/bus/usb/devices/"${devname}":*; do
+    [ -L "$i/driver" ] || continue
+    [ "$(basename "$(readlink "$i/driver")")" = "usbtest" ] && return 0
+  done
+  return 1
 }
 
 bind_usbtest() {
   local devname="$1"
   usbtest_bound "$devname" && return 0
-  # Add id + bind interface 0 explicitly if auto-bind did not happen.
+  # Force it if auto-bind did not happen: add the id, then bind each interface.
   echo "0x$GZ_VID 0x$GZ_PID" > /sys/bus/usb/drivers/usbtest/new_id 2>/dev/null || true
-  echo "${devname}:1.0" > /sys/bus/usb/drivers/usbtest/bind 2>/dev/null || true
+  local i
+  for i in /sys/bus/usb/devices/"${devname}":*; do
+    [ -e "$i" ] || continue
+    echo "$(basename "$i")" > /sys/bus/usb/drivers/usbtest/bind 2>/dev/null || true
+  done
   usbtest_bound "$devname"
 }
 

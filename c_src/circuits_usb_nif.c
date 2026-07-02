@@ -28,18 +28,21 @@
 
 // ---- resource type -------------------------------------------------------
 
-// An in-flight async URB. `kurb` MUST be the first member: USBDEVFS_REAPURBNDELAY
-// hands back the exact pointer we submitted (&urb->kurb), which we cast straight
-// back to Urb*. The kurb and its buffer must stay put until the URB is reaped or
-// the fd is closed, so they live in enif_alloc memory tracked on the owning fd.
+// An in-flight async URB. `kurb` is the LAST member so an isochronous URB's
+// trailing iso_frame_desc[] array can be over-allocated right after it. We
+// recover the Urb from a reaped `struct usbdevfs_urb *` via kurb.usercontext
+// (set to the owning Urb at submit). The kurb and its buffer must stay put until
+// the URB is reaped or the fd is closed, so they live in enif_alloc memory
+// tracked on the owning fd.
 typedef struct Urb {
-    struct usbdevfs_urb kurb;
     unsigned char *buffer;
     size_t buffer_len;
     int is_in;
+    int num_packets; // 0 for bulk/interrupt; >0 for isochronous
     ErlNifUInt64 tag; // caller correlation id
     struct Urb *next;
     struct Urb *prev;
+    struct usbdevfs_urb kurb;
 } Urb;
 
 typedef struct {
@@ -795,6 +798,96 @@ static ERL_NIF_TERM nif_submit(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     return am_ok;
 }
 
+// Max isochronous packets per URB (usbfs caps at 128; keep a bit of headroom).
+#define ISO_MAX_PACKETS 128
+
+// submit_iso(handle, tag :: u64, endpoint, packet_lengths :: [uint], out_data)
+//   -> :ok | {:error, atom}
+// Isochronous URB. packet_lengths gives the per-packet byte counts (and thus the
+// packet count and total buffer size). For IN, out_data is ignored and each
+// packet reads up to its length; for OUT, out_data must be exactly the total.
+// Scheduled ASAP. Reaped by reap/1 with per-packet {actual_length, status}.
+static ERL_NIF_TERM nif_submit_iso(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    ErlNifUInt64 tag;
+    unsigned ep, count;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_uint64(env, argv[1], &tag) ||
+        !get_bounded(env, argv[2], 0xFF, &ep) ||
+        !enif_get_list_length(env, argv[3], &count) ||
+        count == 0 || count > ISO_MAX_PACKETS)
+        return enif_make_badarg(env);
+
+    // Read the per-packet lengths and total.
+    unsigned lengths[ISO_MAX_PACKETS];
+    size_t total = 0;
+    ERL_NIF_TERM head, tail = argv[3];
+    for (unsigned i = 0; i < count; i++) {
+        unsigned l;
+        if (!enif_get_list_cell(env, tail, &head, &tail) || !enif_get_uint(env, head, &l) ||
+            l > 0xFFFF)
+            return enif_make_badarg(env);
+        lengths[i] = l;
+        total += l;
+    }
+    if (total > BULK_MAX_LEN)
+        return enif_make_badarg(env);
+
+    int is_in = (ep & 0x80) != 0;
+    ErlNifBinary out_data = {0};
+    if (!is_in) {
+        if (!enif_inspect_iolist_as_binary(env, argv[4], &out_data) || out_data.size != total)
+            return enif_make_badarg(env);
+    }
+
+    // Over-allocate the Urb so kurb's trailing iso_frame_desc[count] fits.
+    size_t urb_size = sizeof(Urb) + (size_t)count * sizeof(struct usbdevfs_iso_packet_desc);
+    Urb *u = enif_alloc(urb_size);
+    if (!u)
+        return err_tuple(env, ENOMEM);
+    memset(u, 0, urb_size);
+    u->buffer_len = total;
+    u->is_in = is_in;
+    u->num_packets = (int)count;
+    u->tag = tag;
+    if (total) {
+        u->buffer = enif_alloc(total);
+        if (!u->buffer) {
+            enif_free(u);
+            return err_tuple(env, ENOMEM);
+        }
+        if (!is_in)
+            memcpy(u->buffer, out_data.data, total);
+    }
+    u->kurb.type = USBDEVFS_URB_TYPE_ISO;
+    u->kurb.endpoint = (unsigned char)ep;
+    u->kurb.flags = USBDEVFS_URB_ISO_ASAP;
+    u->kurb.buffer = u->buffer;
+    u->kurb.buffer_length = (int)total;
+    u->kurb.number_of_packets = (int)count;
+    u->kurb.usercontext = u;
+    for (unsigned i = 0; i < count; i++)
+        u->kurb.iso_frame_desc[i].length = lengths[i];
+
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        urb_free(u);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    int rc = ioctl(r->fd, USBDEVFS_SUBMITURB, &u->kurb);
+    int e = errno;
+    if (rc < 0) {
+        enif_mutex_unlock(r->lock);
+        urb_free(u);
+        return err_tuple(env, e);
+    }
+    urb_link(r, u);
+    enif_mutex_unlock(r->lock);
+    return am_ok;
+}
+
 // select(handle, ref) -> :ok | {:error, atom}
 // Arm enif_select for write-readiness: usbfs reports POLLOUT when a URB is
 // reapable. The calling process gets `{:select, handle, ref, :ready_output}`.
@@ -841,10 +934,33 @@ static ERL_NIF_TERM nif_reap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
         int rc = ioctl(r->fd, USBDEVFS_REAPURBNDELAY, &ku);
         if (rc < 0)
             break; // EAGAIN (none ready) or a terminal error; stop draining
-        Urb *u = (Urb *)ku; // kurb is the first member
+        Urb *u = (Urb *)ku->usercontext;
 
         ERL_NIF_TERM payload;
-        if (u->is_in) {
+        if (u->num_packets > 0) {
+            // Isochronous: {:iso, data_or_actual, [{actual_length, status}, ...]}.
+            ERL_NIF_TERM plist = enif_make_list(env, 0);
+            for (int i = u->num_packets - 1; i >= 0; i--) {
+                struct usbdevfs_iso_packet_desc *pd = &u->kurb.iso_frame_desc[i];
+                ERL_NIF_TERM pe = enif_make_tuple2(env, enif_make_uint(env, pd->actual_length),
+                                                   urb_status_term(env, (int)pd->status));
+                plist = enif_make_list_cell(env, pe, plist);
+            }
+            ERL_NIF_TERM data;
+            if (u->is_in) {
+                ErlNifBinary b;
+                if (!enif_alloc_binary(u->buffer_len, &b)) {
+                    data = enif_make_int(env, u->kurb.actual_length);
+                } else {
+                    if (u->buffer_len)
+                        memcpy(b.data, u->buffer, u->buffer_len);
+                    data = enif_make_binary(env, &b);
+                }
+            } else {
+                data = enif_make_int(env, u->kurb.actual_length);
+            }
+            payload = enif_make_tuple3(env, mk_atom(env, "iso"), data, plist);
+        } else if (u->is_in) {
             size_t got = u->kurb.actual_length > 0 ? (size_t)u->kurb.actual_length : 0;
             ErlNifBinary b;
             if (!enif_alloc_binary(got, &b)) {
@@ -959,6 +1075,7 @@ static ErlNifFunc nif_funcs[] = {
     {"attach_driver", 2, nif_attach_driver, ERL_NIF_DIRTY_JOB_IO_BOUND},
     // async engine: all non-blocking, run inline on a normal scheduler.
     {"submit_urb", 5, nif_submit, 0},
+    {"submit_iso", 5, nif_submit_iso, 0},
     {"select", 2, nif_select, 0},
     {"reap", 1, nif_reap, 0},
     {"discard", 2, nif_discard, 0},

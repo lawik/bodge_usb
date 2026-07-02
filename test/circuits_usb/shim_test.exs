@@ -197,6 +197,16 @@ defmodule CircuitsUsb.ShimTest do
       Shim.close(h)
     end
 
+    test "submit_iso reaches the kernel and validates packet specs" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert {:error, :enotty} = Shim.submit_iso(h, 1, 0x81, [64, 64, 64], nil)
+      # OUT total must equal the sum of packet lengths.
+      assert_raise ArgumentError, fn -> Shim.submit_iso(h, 2, 0x01, [4, 4], <<1, 2, 3>>) end
+      # at least one packet.
+      assert_raise ArgumentError, fn -> Shim.submit_iso(h, 3, 0x81, [], nil) end
+      Shim.close(h)
+    end
+
     test "discard of an unknown tag is :enoent; reap of an idle fd is empty" do
       {:ok, h} = Shim.open("/dev/null", [:rdwr])
       assert {:error, :enoent} = Shim.discard(h, 12_345)

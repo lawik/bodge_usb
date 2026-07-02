@@ -168,4 +168,18 @@ else
   echo "usbmon: WARNING no interrupt-IN token found in $trace"
 fi
 
+# Phase D -- isochronous transfers (B8). dummy_hcd cannot emulate isoc, so this
+# targets the QEMU usb-audio device on the emulated xHCI. It is always present
+# (VM-level), so the test discovers it itself -- no gadget setup needed.
+echo "== :usbfs_iso tests (QEMU usb-audio, isochronous) =="
+iso_trace="$ARTIFACTS/b8-iso.usbmon"
+"$HARNESS/scripts/a4-usbmon.sh" start 0 "$iso_trace" 2>/dev/null || true  # bus 0 = all
+run_mix mix test --only usbfs_iso
+"$HARNESS/scripts/a4-usbmon.sh" stop "$iso_trace" 2>/dev/null || true
+if grep -qE ' Zo:| Zi:' "$iso_trace" 2>/dev/null; then
+  echo "usbmon: isochronous tokens observed on the wire"
+else
+  echo "usbmon: WARNING no isochronous token found in $iso_trace"
+fi
+
 echo "VERIFY_DONE"

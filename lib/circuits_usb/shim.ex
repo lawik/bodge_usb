@@ -204,6 +204,18 @@ defmodule CircuitsUsb.Shim do
     do: submit_urb(h, tag, @urb_type_interrupt, endpoint, data_or_length)
 
   @doc """
+  Submit an isochronous URB (`USBDEVFS_URB_TYPE_ISO`, scheduled ASAP).
+  `packet_lengths` is the list of per-packet byte counts (its length is the
+  packet count, its sum the total buffer). For IN, `data` is ignored; for OUT it
+  must be exactly the total. `reap/1` returns the completion as
+  `{tag, status, {:iso, data_or_bytes, [{actual_length, packet_status}, ...]}}`.
+  """
+  @spec submit_iso(handle(), non_neg_integer(), 0..255, [0..0xFFFF], iodata() | nil) ::
+          :ok | {:error, atom()}
+  def submit_iso(_h, _tag, _endpoint, _packet_lengths, _data),
+    do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   Arm readiness notification: usbfs signals `POLLOUT` when a URB is reapable.
   The calling process receives `{:select, handle, ref, :ready_output}`. Re-arm
   after each `reap/1` while URBs remain in flight.

@@ -81,6 +81,8 @@ cmd_up() {
   make_seed
   make_overlay
   log "booting VM (kvm, ${CPUS} cpu, ${MEM}MB, ssh -> 127.0.0.1:${SSH_PORT})"
+  # An emulated xHCI + usb-audio device gives the guest a real isochronous
+  # endpoint (dummy_hcd cannot emulate isoc), for the B8 isochronous tests.
   qemu-system-x86_64 \
     -enable-kvm -cpu host -smp "$CPUS" -m "$MEM" \
     -drive file="$OVERLAY",if=virtio,format=qcow2 \
@@ -89,6 +91,9 @@ cmd_up() {
     -device virtio-net-pci,netdev=net0 \
     -fsdev local,id=repo,path="$REPO",security_model=none \
     -device virtio-9p-pci,fsdev=repo,mount_tag="$MOUNT_TAG" \
+    -audiodev none,id=snd0 \
+    -device qemu-xhci,id=xhci \
+    -device usb-audio,audiodev=snd0,bus=xhci.0 \
     -display none -serial file:"$SERIAL" \
     -monitor unix:"$MONITOR",server,nowait \
     -pidfile "$PIDFILE" -daemonize

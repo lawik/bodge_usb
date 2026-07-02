@@ -64,6 +64,23 @@ defmodule CircuitsUsb.Transfer do
   @spec reset(server()) :: :ok | {:error, atom()}
   def reset(server), do: GenServer.call(server, :reset)
 
+  @doc "Select an interface's alternate setting."
+  @spec set_interface(server(), non_neg_integer(), non_neg_integer()) :: :ok | {:error, atom()}
+  def set_interface(server, iface, alt), do: GenServer.call(server, {:set_interface, iface, alt})
+
+  @doc "Control IN transfer (synchronous). See `CircuitsUsb.Shim.control_in/6`."
+  @spec control_in(server(), 0..255, 0..0xFFFF, 0..0xFFFF, non_neg_integer(), timeout()) ::
+          {:ok, binary()} | {:error, atom()}
+  def control_in(server, request, value, index, length, timeout_ms \\ 1000),
+    do:
+      GenServer.call(server, {:control_in, request, value, index, length, timeout_ms}, :infinity)
+
+  @doc "Control OUT transfer (synchronous). See `CircuitsUsb.Shim.control_out/6`."
+  @spec control_out(server(), 0..255, 0..0xFFFF, 0..0xFFFF, iodata(), timeout()) ::
+          {:ok, non_neg_integer()} | {:error, atom()}
+  def control_out(server, request, value, index, data, timeout_ms \\ 1000),
+    do: GenServer.call(server, {:control_out, request, value, index, data, timeout_ms}, :infinity)
+
   @doc """
   Bulk IN transfer on an IN endpoint address (bit 7 set). Blocks the caller
   until it completes, times out, or fails.
@@ -170,6 +187,15 @@ defmodule CircuitsUsb.Transfer do
 
   def handle_call(:reset, _from, state),
     do: {:reply, Shim.reset(state.handle), state}
+
+  def handle_call({:set_interface, iface, alt}, _from, state),
+    do: {:reply, Shim.set_interface(state.handle, iface, alt), state}
+
+  def handle_call({:control_in, request, value, index, length, timeout}, _from, state),
+    do: {:reply, Shim.control_in(state.handle, request, value, index, length, timeout), state}
+
+  def handle_call({:control_out, request, value, index, data, timeout}, _from, state),
+    do: {:reply, Shim.control_out(state.handle, request, value, index, data, timeout), state}
 
   def handle_call({:transfer, kind, endpoint, data_or_length, timeout}, from, state) do
     tag = state.next_tag

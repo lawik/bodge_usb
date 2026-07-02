@@ -1,8 +1,18 @@
 defmodule CircuitsUsbTest do
-  use ExUnit.Case
+  use ExUnit.Case, async: true
   doctest CircuitsUsb
 
-  test "greets the world" do
-    assert CircuitsUsb.hello() == :world
+  describe "facade (no device needed)" do
+    test "list_devices/0 returns a list (empty without usbfs)" do
+      assert is_list(CircuitsUsb.list_devices())
+    end
+
+    test "find_device/2 returns nil when absent" do
+      assert CircuitsUsb.find_device(0xDEAD, 0xBEEF) == nil
+    end
+
+    test "open/2 by vid/pid returns :not_found when absent" do
+      assert CircuitsUsb.open(0xDEAD, 0xBEEF) == {:error, :not_found}
+    end
   end
 end

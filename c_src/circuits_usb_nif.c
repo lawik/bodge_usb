@@ -20,8 +20,10 @@
 #include <stdint.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/socket.h>
 #include <unistd.h>
 
+#include <linux/netlink.h>
 #include <linux/usbdevice_fs.h>
 
 #include <erl_nif.h>
@@ -219,6 +221,30 @@ static int get_bounded(ErlNifEnv *env, ERL_NIF_TERM t, unsigned max, unsigned *o
     return 1;
 }
 
+// Wrap an already-open fd (usbfs node or netlink socket) in a UsbFd resource and
+// return {:ok, handle}. Takes ownership of fd: it is closed on error.
+static ERL_NIF_TERM wrap_fd(ErlNifEnv *env, int fd) {
+    UsbFd *r = enif_alloc_resource(usb_fd_type, sizeof(UsbFd));
+    if (!r) {
+        close(fd);
+        return err_tuple(env, ENOMEM);
+    }
+    r->fd = fd;
+    r->inflight = NULL;
+    r->select_active = 0;
+    r->closing = 0;
+    r->lock = enif_mutex_create("circuits_usb_fd");
+    if (!r->lock) {
+        close(fd);
+        r->fd = -1;
+        enif_release_resource(r);
+        return err_tuple(env, ENOMEM);
+    }
+    ERL_NIF_TERM term = enif_make_resource(env, r);
+    enif_release_resource(r); // the term now owns the only reference
+    return enif_make_tuple2(env, am_ok, term);
+}
+
 // ---- NIFs ----------------------------------------------------------------
 
 // open(path :: binary, flags :: [atom]) -> {:ok, handle} | {:error, atom}
@@ -244,26 +270,7 @@ static ERL_NIF_TERM nif_open(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
     if (fd < 0)
         return err_tuple(env, errno);
 
-    UsbFd *r = enif_alloc_resource(usb_fd_type, sizeof(UsbFd));
-    if (!r) {
-        close(fd);
-        return err_tuple(env, ENOMEM);
-    }
-    r->fd = fd;
-    r->inflight = NULL;
-    r->select_active = 0;
-    r->closing = 0;
-    r->lock = enif_mutex_create("circuits_usb_fd");
-    if (!r->lock) {
-        close(fd);
-        r->fd = -1;
-        enif_release_resource(r);
-        return err_tuple(env, ENOMEM);
-    }
-
-    ERL_NIF_TERM term = enif_make_resource(env, r);
-    enif_release_resource(r); // the term now owns the only reference
-    return enif_make_tuple2(env, am_ok, term);
+    return wrap_fd(env, fd);
 }
 
 // close(handle) -> :ok | {:error, atom}   (idempotent)
@@ -944,6 +951,55 @@ static ERL_NIF_TERM nif_select(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     return am_ok;
 }
 
+// select_read(handle, ref) -> :ok | {:error, atom}
+// Arm enif_select for read-readiness (POLLIN). Used for the hotplug netlink
+// socket. The caller gets `{:select, handle, ref, :ready_input}`.
+static ERL_NIF_TERM nif_select_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r))
+        return enif_make_badarg(env);
+
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0 || r->closing) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    int rc = enif_select(env, (ErlNifEvent)r->fd, ERL_NIF_SELECT_READ, r, NULL, argv[1]);
+    if (rc >= 0)
+        r->select_active = 1;
+    enif_mutex_unlock(r->lock);
+
+    if (rc < 0)
+        return enif_make_tuple2(env, am_error, enif_make_atom(env, "eselect"));
+    return am_ok;
+}
+
+// netlink_uevent_open() -> {:ok, handle} | {:error, atom}
+// Open a NETLINK_KOBJECT_UEVENT socket bound to the kernel uevent broadcast
+// group. read/1 returns one uevent datagram; select_read/2 signals readiness.
+// Non-blocking + cloexec. Usually needs root / CAP_NET_ADMIN.
+static ERL_NIF_TERM nif_netlink_uevent_open(ErlNifEnv *env, int argc,
+                                            const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    (void)argv;
+    int fd = socket(AF_NETLINK, SOCK_DGRAM | SOCK_CLOEXEC | SOCK_NONBLOCK, NETLINK_KOBJECT_UEVENT);
+    if (fd < 0)
+        return err_tuple(env, errno);
+
+    struct sockaddr_nl addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.nl_family = AF_NETLINK;
+    addr.nl_pid = 0;      // let the kernel assign a unique pid
+    addr.nl_groups = 1;   // group 1 == the uevent multicast group
+    if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        int e = errno;
+        close(fd);
+        return err_tuple(env, e);
+    }
+    return wrap_fd(env, fd);
+}
+
 // reap(handle) -> [{tag :: u64, status :: :ok | atom, data_or_actual_length}]
 // Drains all currently-completed URBs with the non-blocking REAPURBNDELAY. For
 // IN URBs the third element is the received binary; for OUT it is the actual
@@ -1112,8 +1168,11 @@ static ErlNifFunc nif_funcs[] = {
     {"submit_urb", 5, nif_submit, 0},
     {"submit_iso", 5, nif_submit_iso, 0},
     {"select", 2, nif_select, 0},
+    {"select_read", 2, nif_select_read, 0},
     {"reap", 1, nif_reap, 0},
     {"discard", 2, nif_discard, 0},
+    // hotplug: netlink uevent socket (read/1 + select_read/2 drive it).
+    {"netlink_uevent_open", 0, nif_netlink_uevent_open, 0},
 };
 
 ERL_NIF_INIT(Elixir.CircuitsUsb.Shim, nif_funcs, load, NULL, NULL, NULL)

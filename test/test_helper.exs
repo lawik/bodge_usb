@@ -13,6 +13,7 @@ ExUnit.start(
     :usbfs_int,
     :usbfs_iso,
     :usbfs_reset,
-    :usbfs_disconnect
+    :usbfs_disconnect,
+    :usbfs_hotplug
   ]
 )

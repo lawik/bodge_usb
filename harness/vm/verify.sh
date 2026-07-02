@@ -108,6 +108,11 @@ run_mix mix test --only usbfs_reset
 echo "== :usbfs_disconnect test (removes g_zero) =="
 run_mix mix test --only usbfs_disconnect
 
+# Hotplug (B10): scripts g_zero connect/disconnect and observes the uevents.
+# dummy_hcd is still loaded; the test loads/unloads g_zero itself.
+echo "== :usbfs_hotplug test =="
+run_mix mix test --only usbfs_hotplug
+
 # Phase C -- interrupt transfers (B7) need an interrupt endpoint; g_zero has
 # none, so switch to a configfs HID gadget (interrupt IN + OUT). The gadget
 # streams a known 8-byte report which the host reads over the interrupt IN ep.

@@ -253,6 +253,23 @@ defmodule CircuitsUsb.Shim do
   @spec discard(handle(), non_neg_integer()) :: :ok | {:error, atom()}
   def discard(_h, _tag), do: :erlang.nif_error(:nif_not_loaded)
 
+  # ---- hotplug (netlink uevents) -----------------------------------------
+
+  @doc """
+  Open a `NETLINK_KOBJECT_UEVENT` socket bound to the kernel uevent broadcast
+  group. `read/2` returns one uevent datagram (NUL-separated `key=value`
+  fields); `select_read/2` signals read-readiness. Usually needs root.
+  """
+  @spec netlink_uevent_open() :: {:ok, handle()} | {:error, atom()}
+  def netlink_uevent_open, do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Arm read-readiness (`POLLIN`) notification on a handle (e.g. the uevent
+  socket). The calling process receives `{:select, handle, ref, :ready_input}`.
+  """
+  @spec select_read(handle(), reference()) :: :ok | {:error, atom()}
+  def select_read(_h, _ref), do: :erlang.nif_error(:nif_not_loaded)
+
   @doc """
   The underlying integer fd, or `{:error, :ebadf}` if closed. Diagnostic aid
   (used by tests to assert descriptors are actually released).

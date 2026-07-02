@@ -150,6 +150,18 @@ cmd_run() {
   esac
 }
 
+cmd_provision_elixir() {
+  vm_running || die "VM not running (run 'up' first)"
+  ensure_mount
+  cmd_ssh "bash $GUEST_REPO/harness/vm/provision-elixir.sh"
+}
+
+cmd_verify_b1() {
+  vm_running || die "VM not running (run 'up' first)"
+  ensure_mount
+  cmd_ssh "sudo bash $GUEST_REPO/harness/vm/verify-b1.sh"
+}
+
 cmd_status() {
   if vm_running; then log "VM running (pid $(cat "$PIDFILE"))"; else log "VM not running"; fi
   ssh "${SSHOPTS[@]}" "$SSH_HOST" 'echo guest: $(uname -r); uptime' 2>/dev/null || log "SSH not reachable"
@@ -166,13 +178,15 @@ cmd_down() {
 cmd_destroy() { cmd_down; rm -f "$OVERLAY"; log "removed overlay $OVERLAY"; }
 
 case "${1:-}" in
-  up)        shift; cmd_up "$@" ;;
-  provision) shift; cmd_provision "$@" ;;
-  sync)      shift; cmd_sync "$@" ;;
-  ssh)       shift; cmd_ssh "$@" ;;
-  run)       shift; cmd_run "$@" ;;
-  status)    shift; cmd_status "$@" ;;
-  down)      shift; cmd_down "$@" ;;
-  destroy)   shift; cmd_destroy "$@" ;;
-  *) echo "usage: $0 {up|provision|sync|ssh [cmd]|run [stage]|status|down|destroy}" >&2; exit 2 ;;
+  up)              shift; cmd_up "$@" ;;
+  provision)       shift; cmd_provision "$@" ;;
+  provision-elixir) shift; cmd_provision_elixir "$@" ;;
+  verify-b1)       shift; cmd_verify_b1 "$@" ;;
+  sync)            shift; cmd_sync "$@" ;;
+  ssh)             shift; cmd_ssh "$@" ;;
+  run)             shift; cmd_run "$@" ;;
+  status)          shift; cmd_status "$@" ;;
+  down)            shift; cmd_down "$@" ;;
+  destroy)         shift; cmd_destroy "$@" ;;
+  *) echo "usage: $0 {up|provision|provision-elixir|verify-b1|sync|ssh [cmd]|run [stage]|status|down|destroy}" >&2; exit 2 ;;
 esac

@@ -100,6 +100,14 @@ modprobe -r usbtest 2>/dev/null || rmmod usbtest 2>/dev/null || true
 echo "== :usbfs integration test =="
 CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only usbfs
 
+# Recovery (B9) tests that disrupt the gadget, run isolated and in order: reset
+# re-enumerates g_zero (it stays up); disconnect then rmmods it. Both discover
+# the gadget by VID/PID themselves, tolerant of the node changing after reset.
+echo "== :usbfs_reset test =="
+run_mix mix test --only usbfs_reset
+echo "== :usbfs_disconnect test (removes g_zero) =="
+run_mix mix test --only usbfs_disconnect
+
 # Phase C -- interrupt transfers (B7) need an interrupt endpoint; g_zero has
 # none, so switch to a configfs HID gadget (interrupt IN + OUT). The gadget
 # streams a known 8-byte report which the host reads over the interrupt IN ep.

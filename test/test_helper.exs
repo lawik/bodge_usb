@@ -5,4 +5,14 @@
 #   :usbfs_driver - gadget zero with usbtest bound (kernel-driver detach)
 #   :usbfs_int    - HID gadget (interrupt transfers)
 #   :usbfs_iso    - QEMU usb-audio device (isochronous transfers)
-ExUnit.start(exclude: [:usbfs, :usbfs_driver, :usbfs_int, :usbfs_iso])
+#   :usbfs_reset / :usbfs_disconnect - g_zero recovery (disrupt the gadget, run isolated)
+ExUnit.start(
+  exclude: [
+    :usbfs,
+    :usbfs_driver,
+    :usbfs_int,
+    :usbfs_iso,
+    :usbfs_reset,
+    :usbfs_disconnect
+  ]
+)

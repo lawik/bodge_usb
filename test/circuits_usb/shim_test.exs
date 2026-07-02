@@ -183,6 +183,23 @@ defmodule CircuitsUsb.ShimTest do
     end
   end
 
+  describe "recovery ioctls (no device needed)" do
+    test "clear_halt/reset reach the kernel (ENOTTY on /dev/null)" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert {:error, :enotty} = Shim.clear_halt(h, 0x81)
+      assert {:error, :enotty} = Shim.reset(h)
+      Shim.close(h)
+    end
+
+    test "closed handle is :ebadf; bad args are badarg" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      assert_raise ArgumentError, fn -> Shim.clear_halt(h, :nope) end
+      :ok = Shim.close(h)
+      assert {:error, :ebadf} = Shim.clear_halt(h, 0x81)
+      assert {:error, :ebadf} = Shim.reset(h)
+    end
+  end
+
   describe "async primitives (no device needed)" do
     test "submit_bulk/interrupt reach the kernel (ENOTTY on /dev/null)" do
       {:ok, h} = Shim.open("/dev/null", [:rdwr])

@@ -708,6 +708,38 @@ static ERL_NIF_TERM nif_detach_driver(ErlNifEnv *env, int argc, const ERL_NIF_TE
     return driver_ioctl(env, argv, USBDEVFS_DISCONNECT);
 }
 
+// clear_halt(handle, endpoint) -> :ok | {:error, atom}
+// Clear an endpoint's halt/stall (USBDEVFS_CLEAR_HALT sends CLEAR_FEATURE
+// ENDPOINT_HALT). Drives a control request, so dirty I/O.
+static ERL_NIF_TERM nif_clear_halt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    return uint_ioctl(env, argv, USBDEVFS_CLEAR_HALT);
+}
+
+// reset(handle) -> :ok | {:error, atom}
+// Reset the device (USBDEVFS_RESET). Re-enumerates, so dirty I/O; the device may
+// come back with a new address, invalidating this handle.
+static ERL_NIF_TERM nif_reset(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r))
+        return enif_make_badarg(env);
+
+    int rc, e = 0;
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    rc = ioctl(r->fd, USBDEVFS_RESET);
+    e = errno;
+    enif_mutex_unlock(r->lock);
+
+    if (rc < 0)
+        return err_tuple(env, e);
+    return am_ok;
+}
+
 // attach_driver(handle, interface) -> :ok | {:error, atom}
 static ERL_NIF_TERM nif_attach_driver(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
@@ -1073,6 +1105,9 @@ static ErlNifFunc nif_funcs[] = {
     {"get_driver", 2, nif_get_driver, 0},
     {"detach_driver", 2, nif_detach_driver, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"attach_driver", 2, nif_attach_driver, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    // recovery: clear stall / reset the device (both drive device round-trips).
+    {"clear_halt", 2, nif_clear_halt, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"reset", 1, nif_reset, ERL_NIF_DIRTY_JOB_IO_BOUND},
     // async engine: all non-blocking, run inline on a normal scheduler.
     {"submit_urb", 5, nif_submit, 0},
     {"submit_iso", 5, nif_submit_iso, 0},

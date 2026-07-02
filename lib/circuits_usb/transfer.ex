@@ -56,6 +56,14 @@ defmodule CircuitsUsb.Transfer do
   @spec attach_driver(server(), non_neg_integer()) :: :ok | {:error, atom()}
   def attach_driver(server, iface), do: GenServer.call(server, {:attach, iface})
 
+  @doc "Clear an endpoint's halt/stall (recovery after an `:epipe` transfer)."
+  @spec clear_halt(server(), 0..255) :: :ok | {:error, atom()}
+  def clear_halt(server, endpoint), do: GenServer.call(server, {:clear_halt, endpoint})
+
+  @doc "Reset the device. The handle may be stale afterwards."
+  @spec reset(server()) :: :ok | {:error, atom()}
+  def reset(server), do: GenServer.call(server, :reset)
+
   @doc """
   Bulk IN transfer on an IN endpoint address (bit 7 set). Blocks the caller
   until it completes, times out, or fails.
@@ -156,6 +164,12 @@ defmodule CircuitsUsb.Transfer do
 
   def handle_call({:attach, iface}, _from, state),
     do: {:reply, Shim.attach_driver(state.handle, iface), state}
+
+  def handle_call({:clear_halt, endpoint}, _from, state),
+    do: {:reply, Shim.clear_halt(state.handle, endpoint), state}
+
+  def handle_call(:reset, _from, state),
+    do: {:reply, Shim.reset(state.handle), state}
 
   def handle_call({:transfer, kind, endpoint, data_or_length, timeout}, from, state) do
     tag = state.next_tag

@@ -166,6 +166,21 @@ defmodule CircuitsUsb.Shim do
   def attach_driver(_h, _interface), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  Clear an endpoint's halt/stall condition (`USBDEVFS_CLEAR_HALT`), the recovery
+  after a transfer fails with `:epipe`. Runs on a dirty I/O scheduler.
+  """
+  @spec clear_halt(handle(), 0..255) :: :ok | {:error, atom()}
+  def clear_halt(_h, _endpoint), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Reset the device (`USBDEVFS_RESET`). The device re-enumerates and may return
+  with a new address, so this handle can become stale afterwards. Runs on a
+  dirty I/O scheduler.
+  """
+  @spec reset(handle()) :: :ok | {:error, atom()}
+  def reset(_h), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   Select an alternate setting for an interface (`USBDEVFS_SETINTERFACE`).
   Runs on a dirty I/O scheduler.
   """

@@ -7,6 +7,9 @@ defmodule CircuitsUsb.MixProject do
       version: "0.1.0",
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
+      compilers: [:elixir_make] ++ Mix.compilers(),
+      make_targets: ["all"],
+      make_clean: ["clean"],
       deps: deps(),
       name: "Circuits usb",
       description: "TODO: write a proper description",
@@ -79,6 +82,7 @@ defmodule CircuitsUsb.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:elixir_make, "~> 0.8", runtime: false},
       {:nstandard, "~> 0.5", runtime: false},
       {:igniter, "~> 0.6", only: [:dev, :test]},
       {:ex_doc, "~> 0.40", only: [:dev, :test], runtime: false},

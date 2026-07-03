@@ -317,16 +317,21 @@ defmodule CircuitsUsb.Shim do
 
   @doc """
   Open a `NETLINK_KOBJECT_UEVENT` socket bound to the kernel uevent broadcast
-  group. `read/2` returns one uevent datagram (NUL-separated `key=value`
-  fields); `select_read/2` signals read-readiness. Usually needs root.
-
-  Note: `read/2` cannot verify the sender, so datagrams are trusted to come
-  from the kernel (group 1). Sending to that group requires `CAP_NET_ADMIN`,
-  so this matches udev's threat model, but a hardened consumer would switch to
-  `recvmsg` and check `nl_pid == 0` before trusting an event.
+  group. Pair with `netlink_read/2` (one uevent datagram, NUL-separated
+  `key=value` fields) and `select_read/2` (read-readiness). Usually needs root.
   """
   @spec netlink_uevent_open() :: {:ok, handle()} | {:error, atom()}
   def netlink_uevent_open(), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
+  Read one uevent datagram from a `netlink_uevent_open/0` socket via `recvmsg`,
+  verifying the kernel sent it (source `nl_pid == 0`, as libudev does). A
+  datagram from a user process (spoofing, or racing the multicast group with
+  `CAP_NET_ADMIN`) is dropped and returned as `{:ok, <<>>}`. Non-blocking:
+  `{:error, :eagain}` once drained. Use this rather than `read/2` for uevents.
+  """
+  @spec netlink_read(handle(), non_neg_integer()) :: {:ok, binary()} | {:error, atom()}
+  def netlink_read(_handle, _count), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Arm read-readiness (`POLLIN`) notification on a handle (e.g. the uevent

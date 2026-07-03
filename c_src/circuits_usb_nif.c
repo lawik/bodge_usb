@@ -21,6 +21,7 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <linux/netlink.h>
@@ -1132,6 +1133,71 @@ static ERL_NIF_TERM nif_netlink_uevent_open(ErlNifEnv *env, int argc,
     return wrap_fd(env, fd);
 }
 
+// Read one uevent datagram, verifying the kernel sent it. A netlink message
+// from the kernel has source nl_pid == 0; a user process (with CAP_NET_ADMIN,
+// or racing the same multicast group) would have nl_pid != 0 and could spoof
+// hotplug events. libudev makes the same check via recvmsg. A non-kernel or
+// address-less datagram is dropped -- returned as an empty binary so the caller
+// keeps draining rather than trusting it. Otherwise like nif_read.
+static ERL_NIF_TERM nif_netlink_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    unsigned long count;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_ulong(env, argv[1], &count))
+        return enif_make_badarg(env);
+    if (count > (16u * 1024 * 1024))
+        return enif_make_badarg(env);
+
+    ErlNifBinary bin;
+    if (!enif_alloc_binary((size_t)count, &bin))
+        return err_tuple(env, ENOMEM);
+
+    struct sockaddr_nl src;
+    memset(&src, 0, sizeof(src));
+    struct iovec iov = {.iov_base = bin.data, .iov_len = (size_t)count};
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.msg_name = &src;
+    msg.msg_namelen = sizeof(src);
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+
+    ssize_t n;
+    int e = 0;
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0 || r->closing) {
+        enif_mutex_unlock(r->lock);
+        enif_release_binary(&bin);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    n = recvmsg(r->fd, &msg, 0);
+    e = errno;
+    enif_mutex_unlock(r->lock);
+
+    if (n < 0) {
+        enif_release_binary(&bin);
+        return err_tuple(env, e);
+    }
+
+    // Trust only a full sockaddr_nl whose nl_pid is 0 (the kernel). Drop
+    // anything else as an empty payload.
+    if (msg.msg_namelen != sizeof(src) || src.nl_pid != 0) {
+        enif_release_binary(&bin);
+        ERL_NIF_TERM empty;
+        (void)enif_make_new_binary(env, 0, &empty);
+        return enif_make_tuple2(env, am_ok, empty);
+    }
+
+    if ((size_t)n != bin.size) {
+        if (!enif_realloc_binary(&bin, (size_t)n)) {
+            enif_release_binary(&bin);
+            return err_tuple(env, ENOMEM);
+        }
+    }
+    return enif_make_tuple2(env, am_ok, enif_make_binary(env, &bin));
+}
+
 // reap(handle) -> [{tag :: u64, status :: :ok | atom, data_or_actual_length}]
 // Drains all currently-completed URBs with the non-blocking REAPURBNDELAY. For
 // IN URBs the third element is the received binary; for OUT it is the actual
@@ -1315,6 +1381,7 @@ static ErlNifFunc nif_funcs[] = {
     {"discard", 2, nif_discard, 0},
     // hotplug: netlink uevent socket (read/1 + select_read/2 drive it).
     {"netlink_uevent_open", 0, nif_netlink_uevent_open, 0},
+    {"netlink_read", 2, nif_netlink_read, 0},
 };
 
 ERL_NIF_INIT(Elixir.CircuitsUsb.Shim, nif_funcs, load, NULL, upgrade, NULL)

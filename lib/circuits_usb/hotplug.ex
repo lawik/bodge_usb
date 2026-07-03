@@ -88,17 +88,21 @@ defmodule CircuitsUsb.Hotplug do
 
   # ---- internal ----------------------------------------------------------
 
-  # One uevent per datagram; read until EAGAIN.
+  # One uevent per datagram; read until EAGAIN. netlink_read/2 verifies the
+  # kernel is the sender and drops anything else as an empty payload.
   defp drain(handle, acc) do
-    case Shim.read(handle, 8192) do
+    case Shim.netlink_read(handle, 8192) do
       {:ok, data} when byte_size(data) > 0 ->
         case parse_uevent(data) do
           {:ok, event} -> drain(handle, [event | acc])
           :skip -> drain(handle, acc)
         end
 
-      {:ok, _empty} ->
-        Enum.reverse(acc)
+      # A dropped (non-kernel) datagram: keep draining so a forged event cannot
+      # mask the real ones queued behind it. EAGAIN, not an empty read, ends the
+      # drain on this non-blocking socket.
+      {:ok, _dropped} ->
+        drain(handle, acc)
 
       {:error, :eagain} ->
         Enum.reverse(acc)

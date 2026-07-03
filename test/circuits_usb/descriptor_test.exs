@@ -55,6 +55,35 @@ defmodule CircuitsUsb.DescriptorTest do
     end
   end
 
+  describe "parse/1 routes undersized interface/endpoint descriptors to extra (L4)" do
+    test "undersized interface descriptor becomes config extra, not an all-nil interface" do
+      # bLength 6, shorter than the 9 an interface header needs.
+      bad_iface = <<6, 4, 0, 0, 2, 0xFF>>
+      assert {:ok, d} = Descriptor.parse(@device <> @config <> bad_iface)
+      [c] = d.configurations
+      assert c.interfaces == []
+      assert [%{type: 4, length: 6, data: ^bad_iface}] = c.extra
+    end
+
+    test "undersized endpoint descriptor becomes interface extra, not an all-nil endpoint" do
+      # bLength 6, shorter than the 7 an endpoint descriptor needs.
+      bad_ep = <<6, 5, 0x81, 0x02, 512::little-16>>
+      assert {:ok, d} = Descriptor.parse(@device <> @config <> @interface <> bad_ep)
+      [c] = d.configurations
+      [i] = c.interfaces
+      assert i.endpoints == []
+      assert [%{type: 5, length: 6, data: ^bad_ep}] = i.extra
+    end
+
+    test "undersized endpoint before any interface becomes config extra" do
+      bad_ep = <<6, 5, 0x81, 0x02, 512::little-16>>
+      assert {:ok, d} = Descriptor.parse(@device <> @config <> bad_ep)
+      [c] = d.configurations
+      assert c.interfaces == []
+      assert [%{type: 5, length: 6, data: ^bad_ep}] = c.extra
+    end
+  end
+
   describe "parse/1 degrades safely on the A3 malformation catalog" do
     test "short device descriptor" do
       assert {:error, :short_device_descriptor} = Descriptor.parse(<<8, 1, 0, 0>>)

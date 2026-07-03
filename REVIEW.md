@@ -376,8 +376,8 @@ scoped rather than buried.
 # Testing and hardening pass (2026-07-03)
 
 A dedicated pass over "is anything skipped or bypassed", plus additional
-tests and hardening. Steps 1-6 of the checklist above were implemented here;
-step 7 (engine isochronous) remains the one open feature.
+tests and hardening. Steps 1-6 of the checklist above were implemented here.
+Step 7 (engine isochronous) was closed in the follow-up API pass below.
 
 Verified: host gates green (58 tests, format, credo --strict, dialyzer, C
 clean under -Wall -Wextra); full in-VM verify.sh green end to end (exit 0,
@@ -503,3 +503,63 @@ Infrastructure:
    the harness already builds dummy_hcd per-kernel.
 8. `mix.exs` still links `github.com/TODO/circuits_usb` (blocked on the real
    repo URL).
+
+---
+
+# API pass: async primitive under the sync calls (2026-07-03)
+
+The engine's public API was inverted: its internals were asynchronous (URB
+tags, a pending map, discard-driven timeouts), but only blocking
+`GenServer.call`s were exposed. Fixed by making the message-based mechanism
+the public primitive and rebuilding the blocking calls on it.
+
+## The primitive
+
+- `Transfer.submit(server, request, opts)` -> `{:ok, ref}` immediately;
+  the completion arrives as `{:circuits_usb, ref, {:ok, result} | {:error,
+  reason}}` to the caller or `opts[:reply_to]`. Requests: `{:bulk_in, ep,
+  len}`, `{:bulk_out, ep, data}`, `{:interrupt_in/out, ...}`, `{:control,
+  request_type, request, value, index, data_or_length}`, `{:iso_in, ep,
+  packet_lengths}`, `{:iso_out, ep, packet_lengths, data}`. Options:
+  `:timeout` (engine timer -> `{:error, :timeout}`), `:reply_to`,
+  `:zero_packet`.
+- `Transfer.cancel(server, ref)` discards in flight; the completion is
+  delivered as `{:error, :cancelled}`, or the real result if it raced.
+- `Transfer.await(server, ref, timeout)` blocks on one completion with
+  `GenServer.call`-parity exit semantics on engine death.
+- The engine monitors each `reply_to` and discards transfers whose receiver
+  died, so an `:infinity` submission cannot be stranded by a dead consumer.
+- Every synchronous call (`bulk_in/4` ... `control_transfer/7`) is now
+  literally `submit/3` + `await/3`; graceful stop still delivers
+  `{:error, :closed}` to every in-flight receiver.
+
+## Isochronous through the engine (closes M5 / step 7)
+
+`{:iso_in, ...}` / `{:iso_out, ...}` requests flow through the same path;
+`iso_in/4` and `iso_out/5` are the blocking conveniences. Streaming (several
+URBs in flight, resubmit on completion) is exactly `submit/3` in a receive
+loop. The README/CHANGELOG no longer scope isochronous to the shim.
+
+## Tier documentation
+
+`CircuitsUsb.Shim` is now documented as a supported primitive tier (raw
+handle, submit/select/reap discipline spelled out) rather than "do not use";
+the facade moduledoc and README describe the three tiers and expose
+`submit/cancel/await` plus `iso_in/iso_out` delegates.
+
+## Verification
+
+- Host: 59 tests green (new plumbing tests: synchronous submission errors,
+  unknown request shapes, option validation, cancel of unknown refs), format,
+  credo --strict, dialyzer, NIF clean build.
+- In-VM full verify: exit 0. `:usbfs` 19/19 -- the pre-existing sync-API suite
+  passing unchanged on top of submit+await is the behavioral proof of the
+  rebuild. New async device test covers pipelined completions, await, cancel
+  (raced and clean), and dead-receiver cleanup under a no-timeout submission.
+- `:usbfs_iso` 2/2 against QEMU usb-audio: blocking `iso_out/5` and a 5-URB
+  async stream, with per-packet accounting asserted and isochronous tokens
+  confirmed on the wire via usbmon.
+
+Remaining from the backlog (unchanged): ASAN/UBSan lane, a3 bulk data phase,
+iso IN device, hotplug bind/unbind + ENOBUFS storm, brutal-kill semantics,
+soak lane, kernel matrix, mix.exs repo URL.

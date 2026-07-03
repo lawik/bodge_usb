@@ -4,6 +4,7 @@ defmodule CircuitsUsb.IsochronousTest do
   alias CircuitsUsb.Descriptor
   alias CircuitsUsb.Enumeration
   alias CircuitsUsb.Shim
+  alias CircuitsUsb.Transfer
 
   # dummy_hcd cannot emulate isochronous transfers, so this runs against the
   # QEMU usb-audio device on the emulated xHCI (see harness/vm/vm.sh). Tag
@@ -53,6 +54,51 @@ defmodule CircuitsUsb.IsochronousTest do
         # Restore the interface to snd-usb-audio for a clean, re-runnable state.
         Shim.attach_driver(h, iface)
         Shim.close(h)
+      end
+    end
+  end
+
+  describe "isochronous OUT through the engine" do
+    @tag :usbfs_iso
+    test "sync wrapper and async submit stream both complete with per-packet accounting" do
+      node = find_audio_node() || flunk("no QEMU usb-audio device present")
+      {:ok, dev} = Enumeration.read_descriptors(node)
+      {iface, alt, ep, mps} = find_iso_out(dev) || flunk("no isochronous OUT endpoint")
+
+      {:ok, eng} = Transfer.start_link(node: node)
+
+      try do
+        assert Transfer.detach_driver(eng, iface) in [:ok, {:error, :enodata}]
+        assert :ok = Transfer.claim_interface(eng, iface)
+        assert :ok = Transfer.set_interface(eng, iface, alt)
+
+        packets = 8
+        lengths = List.duplicate(mps, packets)
+        data = :binary.copy(<<0>>, mps * packets)
+
+        # The blocking convenience: one URB, one result.
+        assert {:ok, {:iso, actual, pkts}} = Transfer.iso_out(eng, ep, lengths, data, 2000)
+        assert actual == mps * packets
+        assert Enum.all?(pkts, fn {alen, pstatus} -> alen == mps and pstatus == :ok end)
+
+        # The primitive: several URBs in flight from one process, completions
+        # as messages -- the shape isochronous streaming actually needs.
+        refs =
+          for _ <- 1..5 do
+            {:ok, ref} = Transfer.submit(eng, {:iso_out, ep, lengths, data}, timeout: 3000)
+            ref
+          end
+
+        for ref <- refs do
+          assert_receive {:circuits_usb, ^ref, {:ok, {:iso, _bytes, pkts}}}, 4000
+          assert length(pkts) == packets
+          assert Enum.all?(pkts, fn {_alen, pstatus} -> pstatus == :ok end)
+        end
+      after
+        Transfer.set_interface(eng, iface, 0)
+        Transfer.release_interface(eng, iface)
+        Transfer.attach_driver(eng, iface)
+        Transfer.stop(eng)
       end
     end
   end

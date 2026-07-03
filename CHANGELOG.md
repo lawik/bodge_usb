@@ -6,10 +6,14 @@ Initial release. Native USB for Elixir on Linux over a usbfs-scoped syscall NIF.
 
 - Device enumeration and defensive descriptor parsing (device/config/interface/
   endpoint/string) into structs; parsing is total (never raises).
-- Control, bulk, and interrupt transfers through an async submit/select/reap
-  engine (`CircuitsUsb.Transfer`), driven by `enif_select` so no scheduler is
-  blocked; per-transfer timeouts and cancellation. Isochronous transfers with
-  per-packet descriptors via the lower-level shim (`submit_iso`).
+- Control, bulk, interrupt, and isochronous transfers through an async
+  submit/select/reap engine (`CircuitsUsb.Transfer`), driven by `enif_select`
+  so no scheduler is blocked; per-transfer timeouts and cancellation.
+- An asynchronous primitive API: `submit/3` returns a ref and the completion
+  arrives as `{:circuits_usb, ref, result}`; `cancel/2` discards in flight;
+  the blocking calls (`bulk_in/4`, ...) are submit + await. The raw
+  `CircuitsUsb.Shim` tier (handle + select/reap, no processes) is also a
+  supported API.
 - Interface claim/release and kernel-driver detach/reattach.
 - Endpoint-stall recovery (`clear_halt`), device reset, and typed handling of
   mid-transfer disconnect.

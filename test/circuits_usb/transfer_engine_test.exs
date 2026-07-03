@@ -50,6 +50,33 @@ defmodule CircuitsUsb.TransferEngineTest do
         Transfer.stop(eng)
       end
     end
+
+    test "submit/3 surfaces submission errors synchronously and validates its input" do
+      {:ok, eng} = Transfer.start_link(node: "/dev/null")
+
+      try do
+        # A refused submission returns the error at once: no ref, no message.
+        assert {:error, :enotty} = Transfer.submit(eng, {:bulk_in, 0x81, 64})
+        refute_receive {:circuits_usb, _, _}, 50
+
+        # Unknown request shapes are typed errors, not crashes.
+        assert {:error, :einval} = Transfer.submit(eng, {:warp_drive, 0x81, 64})
+
+        # Bad options raise at the call site.
+        assert_raise ArgumentError, fn ->
+          Transfer.submit(eng, {:bulk_in, 0x81, 64}, timeout: -5)
+        end
+
+        assert_raise ArgumentError, fn ->
+          Transfer.submit(eng, {:bulk_in, 0x81, 64}, reply_to: :not_a_pid)
+        end
+
+        # Cancelling a ref the engine does not know is a typed error.
+        assert {:error, :not_found} = Transfer.cancel(eng, make_ref())
+      after
+        Transfer.stop(eng)
+      end
+    end
   end
 
   # Integration against gadget-zero source/sink (usbtest removed by verify.sh).
@@ -213,6 +240,53 @@ defmodule CircuitsUsb.TransferEngineTest do
       Process.sleep(100)
       leaked = fdcount.() - before
       assert leaked < 5, "leaked #{leaked} fds across 50 engine open/close cycles"
+    end
+
+    @tag :usbfs
+    test "async submit: completions arrive as messages, cancel works, dead receivers clean up" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, dev} = Enumeration.read_descriptors(node)
+      {iface, ep_in, _ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
+
+      {:ok, eng} = Transfer.start_link(node: node)
+
+      try do
+        :ok = Transfer.claim_interface(eng, iface)
+
+        # One process pipelines many transfers without blocking; completions
+        # come back as messages tagged with each submit's ref.
+        refs =
+          for _ <- 1..16 do
+            {:ok, ref} = Transfer.submit(eng, {:bulk_in, ep_in, 4096}, timeout: 3000)
+            ref
+          end
+
+        for ref <- refs do
+          assert_receive {:circuits_usb, ^ref, {:ok, <<_::4096-bytes>>}}, 3000
+        end
+
+        # await/3 is the blocking convenience over the same mechanism.
+        {:ok, ref} = Transfer.submit(eng, {:bulk_in, ep_in, 512}, timeout: 2000)
+        assert {:ok, <<_::512-bytes>>} = Transfer.await(eng, ref, 3000)
+
+        # Explicit cancel of an in-flight slow transfer: the completion still
+        # arrives, as :cancelled (or the real data if the cancel raced it).
+        {:ok, slow} = Transfer.submit(eng, {:bulk_in, ep_in, 1_048_576})
+        assert :ok = Transfer.cancel(eng, slow)
+        assert_receive {:circuits_usb, ^slow, result}, 3000
+        assert result == {:error, :cancelled} or match?({:ok, _}, result)
+
+        # A dead reply_to must not strand its URB: the engine discards it and
+        # keeps serving (the submission had no timeout, so only the receiver
+        # monitor can clean it up).
+        victim = spawn(fn -> Process.sleep(:infinity) end)
+        {:ok, _orphan} = Transfer.submit(eng, {:bulk_in, ep_in, 1_048_576}, reply_to: victim)
+        Process.exit(victim, :kill)
+        assert {:ok, <<_::512-bytes>>} = Transfer.bulk_in(eng, ep_in, 512, 2000)
+      after
+        Transfer.release_interface(eng, iface)
+        Transfer.stop(eng)
+      end
     end
 
     @tag :usbfs

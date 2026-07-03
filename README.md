@@ -12,14 +12,20 @@ test rig (dummy_hcd, g_zero/usbtest, raw-gadget fault injection, usbmon).
 
 - Enumeration and defensive descriptor parsing (device/config/interface/
   endpoint/string) into structs.
-- Control, bulk, and interrupt transfers through an async submit/select/reap
-  engine (`enif_select`-driven, no blocked schedulers), with per-transfer
-  timeouts and cancellation. Isochronous transfers (per-packet descriptors) via
-  the lower-level shim (`CircuitsUsb.Shim.submit_iso/5`).
+- Control, bulk, interrupt, and isochronous transfers through an async
+  submit/select/reap engine (`enif_select`-driven, no blocked schedulers),
+  with per-transfer timeouts and cancellation.
+- An asynchronous primitive under the blocking calls: `submit/3` returns a
+  ref, the completion arrives as a `{:circuits_usb, ref, result}` message;
+  `bulk_in/4` and friends are just submit + await.
 - Interface claim/release and kernel-driver detach/reattach.
 - Endpoint-stall recovery (`clear_halt`), device reset, and typed handling of
   mid-transfer disconnect.
 - Hotplug notifications over the kernel netlink uevent socket.
+
+Three supported tiers: `CircuitsUsb.Shim` (raw handle + submit/select/reap,
+no processes), `CircuitsUsb.Transfer` (one engine process per device), and
+the `CircuitsUsb` facade below.
 
 ## Example
 
@@ -29,6 +35,13 @@ CircuitsUsb.detach_driver(dev, 0)
 :ok = CircuitsUsb.claim_interface(dev, 0)
 {:ok, data} = CircuitsUsb.bulk_in(dev, 0x81, 512)
 {:ok, _n} = CircuitsUsb.bulk_out(dev, 0x02, data)
+
+# Async: pipeline transfers from one process, completions as messages.
+{:ok, ref} = CircuitsUsb.submit(dev, {:bulk_in, 0x81, 4096}, timeout: 1000)
+receive do
+  {:circuits_usb, ^ref, {:ok, bytes}} -> byte_size(bytes)
+end
+
 CircuitsUsb.close(dev)
 
 {:ok, _hp} = CircuitsUsb.watch_hotplug()

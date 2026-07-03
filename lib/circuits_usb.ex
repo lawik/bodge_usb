@@ -26,6 +26,26 @@ defmodule CircuitsUsb do
         {:usb_hotplug, %{action: :add, busnum: b, devnum: d}} -> ...
       end
 
+  Pipeline transfers without blocking, via the async primitive the blocking
+  calls are built on:
+
+      {:ok, ref} = CircuitsUsb.submit(dev, {:bulk_in, 0x81, 4096}, timeout: 1000)
+      receive do
+        {:circuits_usb, ^ref, {:ok, data}} -> data
+        {:circuits_usb, ^ref, {:error, reason}} -> reason
+      end
+
+  ## API tiers
+
+  Pick the lowest tier that fits; each is a supported API:
+
+    * `CircuitsUsb.Shim` - the primitive: a handle over one fd, raw submit/
+      select/reap. No processes; you run the loop.
+    * `CircuitsUsb.Transfer` - one engine process per device: `submit/3` /
+      `cancel/2` / completion messages, plus blocking conveniences.
+    * `CircuitsUsb` (this module) - discovery, open/close, and delegates for
+      everyday use.
+
   Everything is Linux-only and needs access to `/dev/bus/usb` (root or udev
   rules); hotplug additionally needs the netlink uevent socket (root).
   """
@@ -147,6 +167,35 @@ defmodule CircuitsUsb do
           {:ok, non_neg_integer()} | {:error, atom()}
   def control_out(device, request, value, index, data, timeout \\ 1000),
     do: Transfer.control_out(device, request, value, index, data, timeout)
+
+  @doc "Isochronous IN transfer (one URB). See `CircuitsUsb.Transfer.iso_in/4`."
+  @spec iso_in(device(), 0..255, [0..0xFFFF], timeout()) ::
+          {:ok, {:iso, binary(), [Transfer.iso_packet()]}} | {:error, term()}
+  def iso_in(device, endpoint, packet_lengths, timeout \\ 1000),
+    do: Transfer.iso_in(device, endpoint, packet_lengths, timeout)
+
+  @doc "Isochronous OUT transfer (one URB). See `CircuitsUsb.Transfer.iso_out/5`."
+  @spec iso_out(device(), 0..255, [0..0xFFFF], iodata(), timeout()) ::
+          {:ok, {:iso, non_neg_integer(), [Transfer.iso_packet()]}} | {:error, term()}
+  def iso_out(device, endpoint, packet_lengths, data, timeout \\ 1000),
+    do: Transfer.iso_out(device, endpoint, packet_lengths, data, timeout)
+
+  @doc """
+  Submit a transfer asynchronously; the completion arrives as
+  `{:circuits_usb, ref, result}`. This is the engine's primitive; the blocking
+  calls above are built on it. See `CircuitsUsb.Transfer.submit/3`.
+  """
+  @spec submit(device(), Transfer.request(), keyword()) ::
+          {:ok, reference()} | {:error, atom()}
+  defdelegate submit(device, request, opts \\ []), to: Transfer
+
+  @doc "Cancel an in-flight transfer. See `CircuitsUsb.Transfer.cancel/2`."
+  @spec cancel(device(), reference()) :: :ok | {:error, :not_found}
+  defdelegate cancel(device, ref), to: Transfer
+
+  @doc "Block on one completion. See `CircuitsUsb.Transfer.await/3`."
+  @spec await(device(), reference(), timeout()) :: Transfer.result()
+  defdelegate await(device, ref, timeout \\ :infinity), to: Transfer
 
   @doc "Start watching for hotplug events. See `CircuitsUsb.Hotplug.start_link/1`."
   @spec watch_hotplug(keyword()) :: GenServer.on_start()

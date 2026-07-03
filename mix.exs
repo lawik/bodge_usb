@@ -38,7 +38,7 @@ defmodule CircuitsUsb.MixProject do
     [
       name: :circuits_usb,
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => "https://github.com/TODO/circuits_usb"}
+      links: %{"GitHub" => "https://github.com/lawik/circuits_usb"}
     ]
   end
 

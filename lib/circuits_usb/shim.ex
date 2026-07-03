@@ -1,15 +1,27 @@
 defmodule CircuitsUsb.Shim do
   @moduledoc """
-  Low-level usbfs syscall shim (Part B1).
+  Low-level usbfs syscall shim (Part B1): the primitive tier of this library.
 
   A deliberately narrow NIF over a single file descriptor: `open/2`, `close/1`,
-  `read/2`, `write/2`. The descriptor is held in a NIF resource whose destructor
-  closes it, so a handle that goes out of scope and is garbage collected never
-  leaks an fd.
+  `read/2`, `write/2`, the fixed usbfs ioctls, and the async URB primitives
+  (`submit_bulk/5`, `submit_interrupt/5`, `submit_control/7`, `submit_iso/5`,
+  `select/2`, `reap/1`, `discard/2`). The descriptor is held in a NIF resource
+  whose destructor closes it, so a handle that goes out of scope and is garbage
+  collected never leaks an fd.
 
-  This is the bottom layer. Higher layers (enumeration, the transfer engine, the
-  public API) build on top of it; application code should not normally use it
-  directly.
+  Most applications want the tiers built on top: `CircuitsUsb.Transfer` (a
+  process that owns one handle and runs the submit/select/reap loop for you)
+  or the `CircuitsUsb` facade. This module is a supported API in its own right,
+  though, for code that wants no process between it and the fd -- your own
+  engine, a soft real-time loop, an embedded receive loop. Using it directly
+  means taking on the select/reap discipline yourself:
+
+    * after `submit_*`, arm `select/2`; the poller sends
+      `{:select, handle, ref, :ready_output}` to the calling process when a
+      completion is reapable;
+    * drain with `reap/1` (non-blocking, returns every completed URB), then
+      re-arm `select/2` while URBs remain in flight;
+    * `close/1` (or GC of the handle) cancels everything in flight.
 
   All calls return `{:error, errno_atom}` on failure, where `errno_atom` is the
   captured `errno` as an atom (`:enoent`, `:eacces`, `:enodev`, ...), or `:eNNN`

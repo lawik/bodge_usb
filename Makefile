@@ -24,6 +24,17 @@ endif
 
 LDFLAGS += -shared
 
+# Optional AddressSanitizer + UndefinedBehaviorSanitizer build (SANITIZE=1).
+# The .so is instrumented; run the suite with the ASan runtime preloaded into
+# the BEAM (it is not itself instrumented):
+#   LD_PRELOAD=$(gcc -print-file-name=libasan.so) SANITIZE=1 mix test
+# Used by the scheduled sanitizer CI lane, never by normal builds.
+ifdef SANITIZE
+SAN_FLAGS = -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined
+CFLAGS  += $(SAN_FLAGS) -g -O1
+LDFLAGS += $(SAN_FLAGS)
+endif
+
 all: $(NIF)
 
 $(NIF): $(SRC) $(HEADERS)

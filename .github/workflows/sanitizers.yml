@@ -1,0 +1,53 @@
+name: sanitizers
+
+# Scheduled AddressSanitizer + UndefinedBehaviorSanitizer run of the host-safe
+# suite. The NIF is built instrumented (SANITIZE=1) and the BEAM runs with the
+# ASan runtime preloaded, since beam.smp itself is not instrumented. Not a
+# per-push gate: it is slower and its value is periodic detection of memory/UB
+# regressions in the iso and control buffer arithmetic. Also runnable on demand.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Mondays 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sanitize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: erlef/setup-beam@v1
+        with:
+          otp-version: "29"
+          elixir-version: "1.20"
+
+      - name: Locate the ASan runtime
+        id: asan
+        run: |
+          set -eux
+          lib="$(gcc -print-file-name=libasan.so)"
+          # -print-file-name echoes the bare name back when it is not found.
+          test -f "$lib" || { sudo apt-get update && sudo apt-get install -y libasan8; lib="$(gcc -print-file-name=libasan.so)"; }
+          test -f "$lib"
+          echo "lib=$lib" >> "$GITHUB_OUTPUT"
+
+      - run: mix deps.get
+
+      # Build the instrumented NIF up front, without the preload, so the
+      # compiler BEAM does not run under ASan.
+      - name: Build instrumented NIF (test env)
+        run: MIX_ENV=test SANITIZE=1 mix compile
+
+      - name: Host suite under ASan + UBSan
+        env:
+          LD_PRELOAD: ${{ steps.asan.outputs.lib }}
+          # beam.smp is not instrumented, so its own allocations drown leak
+          # checking and it is not first in the link order; keep those off and
+          # make any real overflow/UB fatal.
+          ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1:verify_asan_link_order=0:halt_on_error=1"
+          UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+        run: MIX_ENV=test mix test --no-compile

@@ -35,6 +35,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 #include <sys/ioctl.h>
 
@@ -62,6 +63,52 @@ static void on_alarm(int sig) {
 	if (g_fd >= 0)
 		close(g_fd);
 	_exit(0);
+}
+
+// ---- ep0 I/O watchdog ------------------------------------------------------
+//
+// The host may abandon an in-flight control transfer (URB unlink on timeout or
+// cancel). raw-gadget then blocks the pending EP0_WRITE/EP0_READ indefinitely,
+// which would wedge ep0 and fail every later request on the device. A watchdog
+// SIGUSR1 EINTRs the stuck ioctl (raw-gadget dequeues the ep0 request when the
+// wait is interrupted), so the device abandons the dead exchange and returns to
+// the event loop -- like real silicon, where a new SETUP supersedes any stale
+// transaction. Legitimate ep0 I/O completes in microseconds and never sees it.
+
+#define EP0_IO_TIMEOUT_MS 500
+
+static timer_t ep0_watchdog;
+
+static void on_ep0_watchdog(int sig) { (void)sig; } // exists only to EINTR the ioctl
+
+static void ep0_watchdog_init(void) {
+	struct sigaction sa;
+	memset(&sa, 0, sizeof(sa));
+	sa.sa_handler = on_ep0_watchdog; // deliberately no SA_RESTART
+	sigaction(SIGUSR1, &sa, NULL);
+
+	struct sigevent sev;
+	memset(&sev, 0, sizeof(sev));
+	sev.sigev_notify = SIGEV_SIGNAL;
+	sev.sigev_signo = SIGUSR1;
+	if (timer_create(CLOCK_MONOTONIC, &sev, &ep0_watchdog) < 0) {
+		perror("timer_create");
+		exit(1);
+	}
+}
+
+static void ep0_watchdog_arm(void) {
+	struct itimerspec its;
+	memset(&its, 0, sizeof(its));
+	its.it_value.tv_sec = EP0_IO_TIMEOUT_MS / 1000;
+	its.it_value.tv_nsec = (long)(EP0_IO_TIMEOUT_MS % 1000) * 1000000L;
+	timer_settime(ep0_watchdog, 0, &its, NULL);
+}
+
+static void ep0_watchdog_disarm(void) {
+	struct itimerspec zero;
+	memset(&zero, 0, sizeof(zero));
+	timer_settime(ep0_watchdog, 0, &zero, NULL);
 }
 
 // ---- descriptor templates ------------------------------------------------
@@ -144,8 +191,14 @@ static int ep0_write(int fd, const void *data, __u32 len) {
 	if (len > EP0_MAX * 8) len = EP0_MAX * 8;
 	io->ep = 0; io->flags = 0; io->length = len;
 	if (len) memcpy(io->data, data, len);
+	ep0_watchdog_arm();
 	int rv = ioctl(fd, USB_RAW_IOCTL_EP0_WRITE, io);
-	if (rv < 0) a3log("EP0_WRITE(%u) failed: %s", len, strerror(errno));
+	int e = errno;
+	ep0_watchdog_disarm();
+	if (rv < 0 && e == EINTR)
+		a3log("EP0_WRITE(%u) abandoned: host cancelled the request", len);
+	else if (rv < 0)
+		a3log("EP0_WRITE(%u) failed: %s", len, strerror(e));
 	return rv;
 }
 
@@ -157,8 +210,14 @@ static int ep0_write(int fd, const void *data, __u32 len) {
 static int ep0_ack_out(int fd) {
 	struct usb_raw_ep_io io;
 	io.ep = 0; io.flags = 0; io.length = 0;
+	ep0_watchdog_arm();
 	int rv = ioctl(fd, USB_RAW_IOCTL_EP0_READ, &io);
-	if (rv < 0) a3log("EP0_READ(0) ack failed: %s", strerror(errno));
+	int e = errno;
+	ep0_watchdog_disarm();
+	if (rv < 0 && e == EINTR)
+		a3log("EP0_READ(0) ack abandoned: host cancelled the request");
+	else if (rv < 0)
+		a3log("EP0_READ(0) ack failed: %s", strerror(e));
 	return rv;
 }
 
@@ -353,6 +412,7 @@ int main(int argc, char **argv) {
 
 	signal(SIGALRM, on_alarm);
 	alarm((unsigned)run_secs);
+	ep0_watchdog_init();
 
 	g_fd = raw_init(driver, device, USB_SPEED_HIGH);
 	if (g_fd < 0) return 1;

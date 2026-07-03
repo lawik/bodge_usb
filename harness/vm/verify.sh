@@ -60,8 +60,10 @@ echo "== bring up a usbfs node (dummy_hcd + g_zero) =="
 preclean
 busnum="$("$HARNESS/scripts/load-dummy.sh")"
 hidwriter=""
+hidreader=""
 cleanup() {
   [ -n "$hidwriter" ] && kill "$hidwriter" 2>/dev/null || true
+  [ -n "$hidreader" ] && kill "$hidreader" 2>/dev/null || true
   pkill -f "raw_gadget/a3_device" 2>/dev/null || true
   # Unbind + remove any configfs gadget we stood up (HID etc.) so it releases the
   # UDC; otherwise rmmod dummy_hcd fails as busy and the next harness run on this
@@ -212,6 +214,13 @@ echo "HID node: $hidnode"
   done ) &
 hidwriter=$!
 
+# Gadget side, OUT direction: capture the one 8-byte OUT report the
+# :usbfs_int interrupt-OUT test sends, to verify content end to end.
+out_report="$ARTIFACTS/b7-out-report.bin"
+rm -f "$out_report"
+( timeout 120 dd if=/dev/hidg0 of="$out_report" bs=8 count=1 2>/dev/null ) &
+hidreader=$!
+
 # Capture the wire; interrupt transfers show as 'Ii'/'Io' tokens in usbmon.
 mkdir -p "$ARTIFACTS"
 trace="$ARTIFACTS/b7-interrupt.usbmon"
@@ -221,10 +230,22 @@ CIRCUITS_USB_TEST_NODE="$hidnode" run_mix mix test --only usbfs_int
 
 "$HARNESS/scripts/a4-usbmon.sh" stop "$trace" 2>/dev/null || true
 kill "$hidwriter" 2>/dev/null || true
-if grep -q ' Ii:' "$trace" 2>/dev/null; then
-  echo "usbmon: interrupt-IN tokens observed on the wire"
+
+# The usbmon trace and the gadget-side OUT report are acceptance evidence, not
+# hints: their absence means the transfers did not hit the wire -- fail loudly.
+grep -aq ' Ii:' "$trace" \
+  || { echo "ERROR: no interrupt-IN token in $trace"; exit 1; }
+grep -aq ' Io:' "$trace" \
+  || { echo "ERROR: no interrupt-OUT token in $trace"; exit 1; }
+echo "usbmon: interrupt IN + OUT tokens observed on the wire"
+
+wait "$hidreader" 2>/dev/null || true
+expected="$(printf '\x08\x07\x06\x05\x04\x03\x02\x01')"
+if [ "$(cat "$out_report" 2>/dev/null)" = "$expected" ]; then
+  echo "gadget side: interrupt-OUT report content verified"
 else
-  echo "usbmon: WARNING no interrupt-IN token found in $trace"
+  echo "ERROR: interrupt-OUT report missing or wrong: $(od -An -tx1 "$out_report" 2>/dev/null)"
+  exit 1
 fi
 
 # Phase D -- isochronous transfers (B8). dummy_hcd cannot emulate isoc, so this
@@ -235,10 +256,10 @@ iso_trace="$ARTIFACTS/b8-iso.usbmon"
 "$HARNESS/scripts/a4-usbmon.sh" start 0 "$iso_trace" 2>/dev/null || true  # bus 0 = all
 run_mix mix test --only usbfs_iso
 "$HARNESS/scripts/a4-usbmon.sh" stop "$iso_trace" 2>/dev/null || true
-if grep -qE ' Zo:| Zi:' "$iso_trace" 2>/dev/null; then
-  echo "usbmon: isochronous tokens observed on the wire"
-else
-  echo "usbmon: WARNING no isochronous token found in $iso_trace"
-fi
+# Acceptance evidence, not a hint (and -a: usbmon data can trip grep's binary
+# detection): no isoc token on the wire means the phase did not do its job.
+grep -aqE ' Zo:| Zi:' "$iso_trace" \
+  || { echo "ERROR: no isochronous token in $iso_trace"; exit 1; }
+echo "usbmon: isochronous tokens observed on the wire"
 
 echo "VERIFY_DONE"

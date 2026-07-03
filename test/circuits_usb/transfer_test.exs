@@ -90,6 +90,35 @@ defmodule CircuitsUsb.TransferTest do
     end
   end
 
+  describe "close during a blocking sync transfer (deferred close)" do
+    @tag :usbfs
+    test "close returns immediately, the in-flight ioctl finishes, then the fd tears down" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, dev} = Enumeration.read_descriptors(node)
+      {iface, ep_in, _ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
+
+      {:ok, h} = Shim.open(node, [:rdwr])
+      :ok = Shim.claim_interface(h, iface)
+
+      # 1 MB is ~40ms through dummy_hcd (and small enough for proc_bulk's
+      # contiguous kmalloc): a real window to close mid-ioctl.
+      task = Task.async(fn -> Shim.bulk_in(h, ep_in, 1_048_576, 3000) end)
+      Process.sleep(10)
+
+      # Deferred close: returns :ok at once, refuses new work, and must NOT
+      # close the fd out from under the blocked ioctl.
+      assert :ok = Shim.close(h)
+      assert {:error, :ebadf} = Shim.bulk_in(h, ep_in, 64, 100)
+
+      # The in-flight transfer still completes (or fails typed), never crashes.
+      assert match?({:ok, _}, Task.await(task, 5000))
+
+      # Once the blocking ioctl ended, the deferred teardown ran.
+      assert {:error, :ebadf} = Shim.read(h, 4)
+      assert {:error, :ebadf} = Shim.fileno(h)
+    end
+  end
+
   # First interface exposing both a bulk IN and a bulk OUT endpoint.
   defp find_bulk_pair(dev) do
     Enum.find_value(dev.configurations, fn c ->

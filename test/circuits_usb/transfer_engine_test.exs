@@ -16,6 +16,40 @@ defmodule CircuitsUsb.TransferEngineTest do
       Process.flag(:trap_exit, true)
       assert {:error, :enoent} = Transfer.start_link(node: "/no/such/node")
     end
+
+    test "invalid timeouts raise at the call site, never mean wait-forever" do
+      {:ok, eng} = Transfer.start_link(node: "/dev/null")
+
+      # apply/3 keeps the deliberately-wrong types away from the compiler's
+      # type checker; the guards must reject them at runtime.
+      try do
+        for {fun, args} <- [
+              {:bulk_in, [eng, 0x81, 64, -1]},
+              {:bulk_out, [eng, 0x01, "x", 1.5]},
+              {:interrupt_in, [eng, 0x81, 8, :forever]},
+              {:control_in, [eng, 0x06, 0x0100, 0, 18, -100]}
+            ] do
+          assert_raise FunctionClauseError, fn -> apply(Transfer, fun, args) end
+        end
+      after
+        Transfer.stop(eng)
+      end
+    end
+
+    test "a direction/payload mismatch is a typed error, not an engine crash" do
+      {:ok, eng} = Transfer.start_link(node: "/dev/null")
+
+      try do
+        # OUT endpoint address with an IN-style length, and vice versa.
+        assert {:error, :einval} = Transfer.bulk_in(eng, 0x02, 512, 500)
+        assert {:error, :einval} = Transfer.bulk_out(eng, 0x81, "data", 500)
+        assert {:error, :einval} = Transfer.interrupt_out(eng, 0x81, "data", 500)
+        # The engine survived all three.
+        assert {:error, :enotty} = Transfer.bulk_in(eng, 0x81, 64, 500)
+      after
+        Transfer.stop(eng)
+      end
+    end
   end
 
   # Integration against gadget-zero source/sink (usbtest removed by verify.sh).
@@ -89,6 +123,96 @@ defmodule CircuitsUsb.TransferEngineTest do
         Transfer.release_interface(eng, iface)
         Transfer.stop(eng)
       end
+    end
+
+    @tag :usbfs
+    test "control OUT with a data stage round-trips through the engine (vendor 0x5b/0x5c)" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, eng} = Transfer.start_link(node: node)
+
+      try do
+        # f_sourcesink implements usbtest's vendor requests: 0x5b stores the
+        # control-OUT data stage, 0x5c returns it. This exercises the async
+        # control URB's OUT marshalling and IN read-back byte-exact (no
+        # interface claim needed; it is all ep0).
+        data = for i <- 0..63, into: <<>>, do: <<i>>
+        assert {:ok, 64} = Transfer.control_transfer(eng, 0x40, 0x5B, 0, 0, data, 1000)
+        assert {:ok, ^data} = Transfer.control_transfer(eng, 0xC0, 0x5C, 0, 0, 64, 1000)
+      after
+        Transfer.stop(eng)
+      end
+    end
+
+    @tag :usbfs
+    test "mixed IN/OUT/control concurrency with a cancel storm leaves the engine consistent" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, dev} = Enumeration.read_descriptors(node)
+      {iface, ep_in, ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
+
+      {:ok, eng} = Transfer.start_link(node: node)
+
+      try do
+        :ok = Transfer.claim_interface(eng, iface)
+        {:ok, pattern} = Transfer.bulk_in(eng, ep_in, 4096, 2000)
+
+        results =
+          1..120
+          |> Task.async_stream(
+            fn i ->
+              case rem(i, 4) do
+                0 -> {:in, Transfer.bulk_in(eng, ep_in, 4096, 3000)}
+                1 -> {:out, Transfer.bulk_out(eng, ep_out, pattern, 3000)}
+                2 -> {:ctrl, Transfer.control_in(eng, 0x06, 0x0100, 0, 18, 3000)}
+                # 256 KB takes ~10ms through dummy_hcd; a 5ms timeout races
+                # completion, so both outcomes are legal (M1: a raced :ok must
+                # deliver the data, never drop it).
+                3 -> {:cancel, Transfer.bulk_in(eng, ep_in, 262_144, 5)}
+              end
+            end,
+            max_concurrency: 40,
+            timeout: 20_000
+          )
+          |> Enum.map(fn {:ok, r} -> r end)
+
+        for {kind, r} <- results do
+          case kind do
+            :in -> assert {:ok, <<_::4096-bytes>>} = r
+            :out -> assert {:ok, 4096} = r
+            :ctrl -> assert {:ok, <<18, 1, _::binary>>} = r
+            :cancel -> assert r == {:error, :timeout} or match?({:ok, <<_::262_144-bytes>>}, r)
+          end
+        end
+
+        # Nothing leaked in the pending map; the engine still serves transfers.
+        assert {:ok, <<_::512-bytes>>} = Transfer.bulk_in(eng, ep_in, 512, 2000)
+      after
+        Transfer.release_interface(eng, iface)
+        Transfer.stop(eng)
+      end
+    end
+
+    @tag :usbfs
+    test "repeated open/claim/transfer/close cycles do not leak fds" do
+      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      {:ok, dev} = Enumeration.read_descriptors(node)
+      {iface, ep_in, _ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
+
+      fdcount = fn -> length(File.ls!("/proc/self/fd")) end
+      before = fdcount.()
+
+      for _ <- 1..50 do
+        {:ok, eng} = Transfer.start_link(node: node)
+        :ok = Transfer.claim_interface(eng, iface)
+        {:ok, <<_::4096-bytes>>} = Transfer.bulk_in(eng, ep_in, 4096, 2000)
+        :ok = Transfer.release_interface(eng, iface)
+        :ok = Transfer.stop(eng)
+      end
+
+      # The select-stop teardown closes the fd from the poller thread; give the
+      # last one a moment before counting.
+      Process.sleep(100)
+      leaked = fdcount.() - before
+      assert leaked < 5, "leaked #{leaked} fds across 50 engine open/close cycles"
     end
 
     @tag :usbfs

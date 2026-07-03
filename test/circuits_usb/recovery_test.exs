@@ -41,11 +41,29 @@ defmodule CircuitsUsb.RecoveryTest do
 
   describe "device reset" do
     @tag :usbfs_reset
-    test "reset succeeds" do
+    test "reset succeeds and the device comes back usable" do
       node = find_gzero() || flunk("no gadget zero")
       {:ok, h} = Shim.open(node, [:rdwr])
       assert :ok = Shim.reset(h)
       Shim.close(h)
+
+      # The device re-enumerates (possibly at a new address). It must come
+      # back, and its descriptors must read and parse: reset that leaves the
+      # device unusable would otherwise pass silently.
+      assert {:ok, %Descriptor.Device{vendor_id: @gzero_vendor}} = wait_for_gzero(50)
+    end
+  end
+
+  defp wait_for_gzero(0), do: {:error, :gadget_never_returned}
+
+  defp wait_for_gzero(tries) do
+    with node when is_binary(node) <- find_gzero() || :not_yet,
+         {:ok, dev} <- Enumeration.read_descriptors(node) do
+      {:ok, dev}
+    else
+      _ ->
+        Process.sleep(100)
+        wait_for_gzero(tries - 1)
     end
   end
 

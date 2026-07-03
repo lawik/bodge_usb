@@ -79,6 +79,11 @@ defmodule CircuitsUsb.Transfer do
   @spec set_interface(server(), non_neg_integer(), non_neg_integer()) :: :ok | {:error, atom()}
   def set_interface(server, iface, alt), do: GenServer.call(server, {:set_interface, iface, alt})
 
+  # A transfer timeout is a non-negative integer in ms (0 = no timeout) or
+  # :infinity. Anything else (negative, float, atom) raises at the call site
+  # instead of silently meaning "wait forever".
+  defguardp valid_timeout(t) when t == :infinity or (is_integer(t) and t >= 0)
+
   @doc """
   Control transfer with an explicit `request_type` (`bmRequestType`), for
   class/vendor and non-device-recipient requests. Direction is bit 7 of
@@ -103,12 +108,13 @@ defmodule CircuitsUsb.Transfer do
         index,
         data_or_length,
         timeout_ms \\ 1000
-      ),
+      )
+      when valid_timeout(timeout_ms),
       do:
         GenServer.call(
           server,
           {:control, request_type, request, value, index, data_or_length, timeout_ms},
-          :infinity
+          call_timeout(timeout_ms)
         )
 
   @doc "Standard device-recipient control IN. See `control_transfer/7`."
@@ -130,7 +136,7 @@ defmodule CircuitsUsb.Transfer do
   """
   @spec bulk_in(server(), 0..255, non_neg_integer(), timeout()) ::
           {:ok, binary()} | {:error, term()}
-  def bulk_in(server, endpoint, length, timeout \\ 1000) do
+  def bulk_in(server, endpoint, length, timeout \\ 1000) when valid_timeout(timeout) do
     GenServer.call(
       server,
       {:transfer, :bulk, endpoint, length, timeout, []},
@@ -146,7 +152,7 @@ defmodule CircuitsUsb.Transfer do
   """
   @spec bulk_out(server(), 0..255, iodata(), timeout(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def bulk_out(server, endpoint, data, timeout \\ 1000, opts \\ []) do
+  def bulk_out(server, endpoint, data, timeout \\ 1000, opts \\ []) when valid_timeout(timeout) do
     GenServer.call(
       server,
       {:transfer, :bulk, endpoint, data, timeout, opts},
@@ -161,7 +167,7 @@ defmodule CircuitsUsb.Transfer do
   """
   @spec interrupt_in(server(), 0..255, non_neg_integer(), timeout()) ::
           {:ok, binary()} | {:error, term()}
-  def interrupt_in(server, endpoint, length, timeout \\ 1000) do
+  def interrupt_in(server, endpoint, length, timeout \\ 1000) when valid_timeout(timeout) do
     GenServer.call(
       server,
       {:transfer, :interrupt, endpoint, length, timeout, []},
@@ -176,7 +182,8 @@ defmodule CircuitsUsb.Transfer do
   """
   @spec interrupt_out(server(), 0..255, iodata(), timeout(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
-  def interrupt_out(server, endpoint, data, timeout \\ 1000, opts \\ []) do
+  def interrupt_out(server, endpoint, data, timeout \\ 1000, opts \\ [])
+      when valid_timeout(timeout) do
     GenServer.call(
       server,
       {:transfer, :interrupt, endpoint, data, timeout, opts},

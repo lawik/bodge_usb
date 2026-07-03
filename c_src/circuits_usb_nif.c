@@ -370,7 +370,7 @@ static ERL_NIF_TERM nif_read(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
     ssize_t n;
     int e = 0;
     enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (r->fd < 0 || r->closing) {
         enif_mutex_unlock(r->lock);
         enif_release_binary(&bin);
         return enif_make_tuple2(env, am_error, am_ebadf);
@@ -405,7 +405,7 @@ static ERL_NIF_TERM nif_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
     ssize_t n;
     int e = 0;
     enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (r->fd < 0 || r->closing) {
         enif_mutex_unlock(r->lock);
         return enif_make_tuple2(env, am_error, am_ebadf);
     }
@@ -652,7 +652,7 @@ static ERL_NIF_TERM uint_ioctl(ErlNifEnv *env, const ERL_NIF_TERM argv[],
     } else {
         // Fast fd bookkeeping (claim/release): a brief lock is fine.
         enif_mutex_lock(r->lock);
-        if (r->fd < 0) {
+        if (r->fd < 0 || r->closing) {
             enif_mutex_unlock(r->lock);
             return enif_make_tuple2(env, am_error, am_ebadf);
         }
@@ -696,7 +696,7 @@ static ERL_NIF_TERM nif_get_driver(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
 
     int rc, e = 0;
     enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (r->fd < 0 || r->closing) {
         enif_mutex_unlock(r->lock);
         return enif_make_tuple2(env, am_error, am_ebadf);
     }
@@ -860,7 +860,7 @@ static ERL_NIF_TERM nif_submit(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     u->kurb.usercontext = u;
 
     enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (r->fd < 0 || r->closing) {
         enif_mutex_unlock(r->lock);
         urb_free(u);
         return enif_make_tuple2(env, am_error, am_ebadf);
@@ -947,7 +947,7 @@ static ERL_NIF_TERM nif_submit_control(ErlNifEnv *env, int argc, const ERL_NIF_T
     u->kurb.usercontext = u;
 
     enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (r->fd < 0 || r->closing) {
         enif_mutex_unlock(r->lock);
         urb_free(u);
         return enif_make_tuple2(env, am_error, am_ebadf);
@@ -1042,7 +1042,7 @@ static ERL_NIF_TERM nif_submit_iso(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
         u->kurb.iso_frame_desc[i].length = lengths[i];
 
     enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (r->fd < 0 || r->closing) {
         enif_mutex_unlock(r->lock);
         urb_free(u);
         return enif_make_tuple2(env, am_error, am_ebadf);
@@ -1145,7 +1145,7 @@ static ERL_NIF_TERM nif_reap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
     ERL_NIF_TERM list = enif_make_list(env, 0);
 
     enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (r->fd < 0 || r->closing) {
         enif_mutex_unlock(r->lock);
         return list;
     }
@@ -1220,7 +1220,7 @@ static ERL_NIF_TERM nif_discard(ErlNifEnv *env, int argc, const ERL_NIF_TERM arg
         return enif_make_badarg(env);
 
     enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (r->fd < 0 || r->closing) {
         enif_mutex_unlock(r->lock);
         return enif_make_tuple2(env, am_error, am_ebadf);
     }
@@ -1249,7 +1249,7 @@ static ERL_NIF_TERM nif_fileno(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
         return enif_make_badarg(env);
     int fd;
     enif_mutex_lock(r->lock);
-    fd = r->fd;
+    fd = r->closing ? -1 : r->fd;
     enif_mutex_unlock(r->lock);
     if (fd < 0)
         return enif_make_tuple2(env, am_error, am_ebadf);

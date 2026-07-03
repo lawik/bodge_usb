@@ -42,8 +42,12 @@ defmodule CircuitsUsb.Shim do
 
   @doc """
   Close a handle. Idempotent: closing an already-closed handle returns `:ok`.
+
+  Always returns `:ok`. If a blocking ioctl is mid-flight on the handle, the
+  fd teardown is deferred until it finishes (the fd is never closed out from
+  under an active syscall); new operations are refused from this call onward.
   """
-  @spec close(handle()) :: :ok | {:error, atom()}
+  @spec close(handle()) :: :ok
   def close(_handle), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
@@ -303,6 +307,11 @@ defmodule CircuitsUsb.Shim do
   Open a `NETLINK_KOBJECT_UEVENT` socket bound to the kernel uevent broadcast
   group. `read/2` returns one uevent datagram (NUL-separated `key=value`
   fields); `select_read/2` signals read-readiness. Usually needs root.
+
+  Note: `read/2` cannot verify the sender, so datagrams are trusted to come
+  from the kernel (group 1). Sending to that group requires `CAP_NET_ADMIN`,
+  so this matches udev's threat model, but a hardened consumer would switch to
+  `recvmsg` and check `nl_pid == 0` before trusting an event.
   """
   @spec netlink_uevent_open() :: {:ok, handle()} | {:error, atom()}
   def netlink_uevent_open(), do: :erlang.nif_error(:nif_not_loaded)

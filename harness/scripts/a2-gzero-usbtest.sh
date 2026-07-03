@@ -19,22 +19,20 @@ GZ_VID="0525"
 GZ_PID="a4a0"
 
 # Curated known-good cases for gadget-zero source/sink over dummy_hcd:
-#   1  control write        9  control queue / unlink
-#   2  bulk OUT (sink)      10 bulk queued OUT
-#   3  bulk IN  (source)    13 set/clear halt (endpoint stall recovery)
-#   5  control read
-# Curated known-good cases for gadget-zero source/sink over dummy_hcd:
-#   1  control write        10 queued bulk        13 set/clear halt (stall recovery)
-#   2  bulk OUT (sink)       11 unlink reads       14 control writes
-#   3  bulk IN  (source)     12 unlink writes
-#   5  control read           9 control queue
-# 11/12 (unlink) are the kernel baseline for our async discard/cancel path.
-# gadget zero (source/sink) supports the bulk + control cases below. Cases 14+
-# are isochronous, which dummy_hcd cannot emulate (usbtest returns EINVAL); B8
-# exercises isoc against the QEMU usb-audio device instead.
-TESTS="${TESTS:-1 2 3 5 9 10 11 12 13}"
+#   1  bulk write (sink)     10 control queueing   13 set/clear halt (stall recovery)
+#   2  bulk read (source)    11 unlink reads       14 control writes (ctrl_out)
+#   3  bulk write varied      12 unlink writes
+#   5  queued bulk writes      9 ch9 postconfig
+# 11/12 (unlink) are the kernel baseline for our async discard/cancel path; 14
+# is the baseline for control OUT with a data stage. 15/16 are isochronous,
+# which dummy_hcd cannot emulate; B8 exercises isoc against QEMU usb-audio.
+TESTS="${TESTS:-1 2 3 5 9 10 11 12 13 14}"
 ITER="${ITER:-1000}"
 SIZE="${SIZE:-1024}"
+# usbtest's ctrl_out (case 14) requires vary < length, but testusb's default
+# vary is 1024 == our SIZE, which fails the param check with EINVAL before any
+# USB traffic. Keep vary at half the transfer size.
+VARY="${VARY:-$((SIZE / 2))}"
 
 TESTUSB_DIR="$HARNESS_ROOT/tools/testusb"
 LOG="$ARTIFACTS_DIR/a2.log"
@@ -121,8 +119,8 @@ main() {
   make -C "$TESTUSB_DIR" >>"$LOG" 2>&1 || die "failed to build testusb"
   local bin="$TESTUSB_DIR/testusb" t out
   for t in $TESTS; do
-    log "usbtest case $t (iter=$ITER size=$SIZE)"
-    out="$("$bin" -D "$node" -t "$t" -c "$ITER" -s "$SIZE" 2>&1)" || true
+    log "usbtest case $t (iter=$ITER size=$SIZE vary=$VARY)"
+    out="$("$bin" -D "$node" -t "$t" -c "$ITER" -s "$SIZE" -v "$VARY" 2>&1)" || true
     printf '=== test %s ===\n%s\n' "$t" "$out" >>"$LOG"
     if ! printf '%s' "$out" | grep -qi 'speed'; then
       # No speed line => testusb did not open/run the device at all.
@@ -131,14 +129,11 @@ main() {
       case_fail "A2 usbtest case $t: $(printf '%s' "$out" | grep -- '-->' | head -1)"
     elif printf '%s' "$out" | grep -q "test $t,"; then
       case_pass "A2 usbtest case $t"
-    elif printf '%s' "$out" | grep -q "test $t"; then
-      # A 'test N' line we cannot classify => testusb output format changed;
-      # fail loudly rather than silently drop coverage.
-      case_fail "A2 usbtest case $t: unrecognized result (testusb format change?) -- $out"
     else
-      # testusb ran but emitted no 'test N' line: the case is not implemented
-      # for this gadget (EOPNOTSUPP). A genuine skip.
-      log "usbtest case $t not supported by gadget zero (skipped)"
+      # Anything else (unrecognized output, or no result line at all): fail
+      # loudly. Every case in the curated list is known-good for gadget zero,
+      # so a silent skip here would be silently dropped coverage.
+      case_fail "A2 usbtest case $t: no recognizable result -- $out"
     fi
   done
 

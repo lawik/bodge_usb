@@ -36,3 +36,6 @@ jobs:
       - run: mix format --check-formatted
       - run: mix credo --strict
       - run: mix test
+      # PLTs land in _build, which the cache step above already covers: the
+      # first run pays the PLT build, later runs take seconds.
+      - run: mix dialyzer

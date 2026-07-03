@@ -97,7 +97,20 @@ defmodule CircuitsUsb.Hotplug do
           :skip -> drain(handle, acc)
         end
 
-      _ ->
+      {:ok, _empty} ->
+        Enum.reverse(acc)
+
+      {:error, :eagain} ->
+        Enum.reverse(acc)
+
+      {:error, reason} ->
+        # ENOBUFS means the kernel dropped uevents on socket overrun; anything
+        # else is equally worth surfacing -- never swallow it silently.
+        Logger.warning(
+          "CircuitsUsb.Hotplug: uevent read failed: #{inspect(reason)} " <>
+            "(events may have been lost)"
+        )
+
         Enum.reverse(acc)
     end
   end

@@ -232,6 +232,21 @@ defmodule CircuitsUsb.ShimTest do
       Shim.close(h)
     end
 
+    test "submit_iso boundary: 128 packets is the cap, per-packet length caps at 0xFFFF" do
+      {:ok, h} = Shim.open("/dev/null", [:rdwr])
+      # Exactly at the cap: marshalling succeeds and reaches the kernel.
+      assert {:error, :enotty} = Shim.submit_iso(h, 1, 0x81, List.duplicate(64, 128), nil)
+      # One past the cap is rejected before any syscall.
+      assert_raise ArgumentError, fn ->
+        Shim.submit_iso(h, 2, 0x81, List.duplicate(64, 129), nil)
+      end
+
+      # Per-packet length is bounded to a __u16.
+      assert {:error, :enotty} = Shim.submit_iso(h, 3, 0x81, [0xFFFF], nil)
+      assert_raise ArgumentError, fn -> Shim.submit_iso(h, 4, 0x81, [0x10000], nil) end
+      Shim.close(h)
+    end
+
     test "discard of an unknown tag is :enoent; reap of an idle fd is empty" do
       {:ok, h} = Shim.open("/dev/null", [:rdwr])
       assert {:error, :enoent} = Shim.discard(h, 12_345)

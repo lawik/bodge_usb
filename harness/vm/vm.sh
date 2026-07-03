@@ -67,13 +67,24 @@ EOF
   log "created cloud-init seed $SEED"
 }
 
+# "current" is a moving target; pin a dated release via CIRCUITS_VM_IMAGE_URL
+# (e.g. .../releases/noble/release-YYYYMMDD/...) and set CIRCUITS_VM_IMAGE_SHA256
+# to verify the download for a reproducible, tamper-evident base image.
 BASE_IMAGE_URL="${CIRCUITS_VM_IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"
+BASE_IMAGE_SHA256="${CIRCUITS_VM_IMAGE_SHA256:-}"
 
 fetch_base_image() {
   [ -f "$BASE" ] && return 0
   command -v curl >/dev/null 2>&1 || die "curl needed to download the base image"
   log "downloading base cloud image (~600MB, one time): $BASE_IMAGE_URL"
   curl -L --fail --retry 3 -C - -o "$BASE.part" "$BASE_IMAGE_URL" || die "image download failed"
+  if [ -n "$BASE_IMAGE_SHA256" ]; then
+    echo "$BASE_IMAGE_SHA256  $BASE.part" | sha256sum -c - >/dev/null 2>&1 \
+      || die "base image sha256 mismatch (expected $BASE_IMAGE_SHA256)"
+    log "base image sha256 verified"
+  else
+    log "no CIRCUITS_VM_IMAGE_SHA256 set; skipping image verification"
+  fi
   mv "$BASE.part" "$BASE"
 }
 

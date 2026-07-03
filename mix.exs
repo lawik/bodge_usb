@@ -30,6 +30,8 @@ defmodule CircuitsUsb.MixProject do
   def docs do
     [
       main: "readme",
+      source_url: "https://github.com/lawik/circuits_usb",
+      source_ref: "main",
       extras: ["README.md"]
     ]
   end

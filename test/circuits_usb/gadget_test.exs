@@ -99,6 +99,22 @@ defmodule CircuitsUsb.GadgetTest do
       _ = Gadget.remove(g)
       refute File.exists?(link)
     end
+
+    test "rejects an attribute key that would escape the gadget tree", %{root: root} do
+      # Names are validated, but keys reach the filesystem as path segments too.
+      assert {:error, {_, {:unsafe_attribute_name, "../escape"}}} =
+               Gadget.define("demo", %{attrs: %{"../escape" => 1}}, root: root)
+
+      refute File.exists?(Path.join(root, "escape"))
+      refute File.dir?(Path.join(root, "demo"))
+    end
+
+    test "an unsupported attribute value fails typed and leaves no tree", %{root: root} do
+      assert {:error, {:build_failed, _}} =
+               Gadget.define("demo", %{attrs: %{"bDeviceClass" => :nope}}, root: root)
+
+      refute File.dir?(Path.join(root, "demo"))
+    end
   end
 
   # Both USB roles in one test: this library defines the device via configfs,

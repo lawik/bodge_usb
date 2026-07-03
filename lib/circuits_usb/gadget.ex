@@ -216,7 +216,15 @@ defmodule CircuitsUsb.Gadget do
       fn -> build_configs(gadget, Map.get(spec, :configs, %{})) end
     ]
 
-    case run_steps(steps) do
+    result =
+      try do
+        run_steps(steps)
+      rescue
+        # e.g. an unsupported attribute value type; never leak a partial tree.
+        e -> {:error, {:build_failed, Exception.message(e)}}
+      end
+
+    case result do
       :ok ->
         {:ok, gadget}
 
@@ -334,11 +342,22 @@ defmodule CircuitsUsb.Gadget do
   end
 
   defp write_attr(dir, file, value) do
-    case File.write(Path.join(dir, file), format_value(value)) do
-      :ok -> :ok
-      {:error, _} = err -> err
+    if safe_segment?(file) do
+      case File.write(Path.join(dir, file), format_value(value)) do
+        :ok -> :ok
+        {:error, _} = err -> err
+      end
+    else
+      {:error, {:unsafe_attribute_name, file}}
     end
   end
+
+  # An attribute or string key becomes a filename directly under `dir`. Reject
+  # anything that is not a single path segment so a crafted spec cannot write
+  # (as root) outside the gadget tree -- gadget/function/config *names* are
+  # validated up front, but keys reach the filesystem here.
+  defp safe_segment?(name),
+    do: name != "" and name != "." and name != ".." and not String.contains?(name, "/")
 
   # Integers in decimal (the kernel parses base 0, and decimal never collides
   # with its leading-0 octal rule); binaries raw (report descriptors); booleans
@@ -347,6 +366,9 @@ defmodule CircuitsUsb.Gadget do
   defp format_value(true), do: "1"
   defp format_value(false), do: "0"
   defp format_value(value) when is_binary(value), do: value
+
+  defp format_value(value),
+    do: raise(ArgumentError, "unsupported gadget attribute value: #{inspect(value)}")
 
   defp resolve_chardev(dev_attr) do
     with {:ok, content} <- File.read(dev_attr),

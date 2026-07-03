@@ -161,6 +161,16 @@ run_a3_phase bad-device-blength usbfs_a3_blength
 echo "== :usbfs_a3_slow (live raw-gadget slow) =="
 run_a3_phase slow usbfs_a3_slow
 
+# Part C1 -- the library plays BOTH roles: CircuitsUsb.Gadget defines a HID
+# gadget via configfs and binds it to dummy_udc.0, while the host tier of the
+# same library enumerates it and exchanges interrupt reports with it.
+echo "== :usbfs_gadget tests (library-defined configfs gadget) =="
+teardown_configfs_gadgets
+rmmod g_zero 2>/dev/null || true
+modprobe libcomposite usb_f_hid
+run_mix mix test --only usbfs_gadget
+teardown_configfs_gadgets
+
 # Phase C -- interrupt transfers (B7) need an interrupt endpoint; g_zero has
 # none, so switch to a configfs HID gadget (interrupt IN + OUT). The gadget
 # streams a known 8-byte report which the host reads over the interrupt IN ep.

@@ -17,6 +17,7 @@ ExUnit.start(
     :usbfs_hotplug,
     :usbfs_a3_stall,
     :usbfs_a3_blength,
-    :usbfs_a3_slow
+    :usbfs_a3_slow,
+    :usbfs_gadget
   ]
 )

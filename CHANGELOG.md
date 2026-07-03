@@ -19,3 +19,6 @@ Initial release. Native USB for Elixir on Linux over a usbfs-scoped syscall NIF.
   mid-transfer disconnect.
 - Hotplug notifications over the kernel netlink uevent socket.
 - Optional terminating zero-length packet (`zero_packet`) on OUT transfers.
+- Device-side gadgets over configfs (`CircuitsUsb.Gadget`): declarative
+  define/bind/unbind/remove, device-node and network-interface resolution
+  for kernel function drivers (HID, ACM, ECM, ...).

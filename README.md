@@ -22,6 +22,9 @@ test rig (dummy_hcd, g_zero/usbtest, raw-gadget fault injection, usbmon).
 - Endpoint-stall recovery (`clear_halt`), device reset, and typed handling of
   mid-transfer disconnect.
 - Hotplug notifications over the kernel netlink uevent socket.
+- Device-side (gadget) definition over configfs (`CircuitsUsb.Gadget`): act
+  as a HID/serial/ethernet/mass-storage/... device on UDC-capable hardware,
+  with chardev functions driven through the same shim tier.
 
 Three supported tiers: `CircuitsUsb.Shim` (raw handle + submit/select/reap,
 no processes), `CircuitsUsb.Transfer` (one engine process per device), and

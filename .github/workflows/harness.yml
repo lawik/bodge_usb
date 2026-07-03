@@ -3,20 +3,20 @@ name: usb-harness
 # Part A test harness (PROJECT.md A5): build the out-of-tree dummy_hcd, then run
 # A1..A4 headless and privileged, retaining logs and usbmon traces as artifacts.
 #
-# Privileged kernel work (insmod, configfs, raw-gadget, usbmon) needs a runner
-# whose kernel ships the gadget modules (raw_gadget, g_zero, usbtest,
-# libcomposite, usb_f_acm, udc-core) and allows module loading. GitHub-hosted
-# Ubuntu runners usually can once linux-modules-extra is installed; if a module
-# is missing the affected stage fails loudly. Use a self-hosted privileged
-# runner for a guaranteed environment by overriding `runner` on dispatch.
+# Manual dispatch only. Building dummy_hcd out-of-tree needs a kernel that
+# exports the gadget/UDC core symbols (usb_add_gadget_udc, usb_gadget_udc_reset,
+# usb_gadget_giveback_request, ...); GitHub-hosted runners do NOT (their Azure
+# kernel omits them), so the build fails at modpost there regardless of
+# linux-modules-extra. Running A1..A4 further needs module loading, configfs,
+# raw-gadget and usbmon. Dispatch this onto a self-hosted privileged runner via
+# the `runner` input, or run the harness locally in the KVM VM
+# (`harness/vm/vm.sh run all`). The per-push host-safe gates live in ci.yml.
 
 on:
-  push:
-  pull_request:
   workflow_dispatch:
     inputs:
       runner:
-        description: "Runner label to use"
+        description: "Runner label (self-hosted, with the USB gadget subsystem)"
         default: "ubuntu-latest"
 
 permissions:

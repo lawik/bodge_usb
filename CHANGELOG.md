@@ -22,3 +22,7 @@ Initial release. Native USB for Elixir on Linux over a usbfs-scoped syscall NIF.
 - Device-side gadgets over configfs (`CircuitsUsb.Gadget`): declarative
   define/bind/unbind/remove, device-node and network-interface resolution
   for kernel function drivers (HID, ACM, ECM, ...).
+- Custom device functions over FunctionFS (`CircuitsUsb.FunctionFs`):
+  descriptor/strings blob construction, ep0 event loop with a SETUP handler
+  contract, endpoint files via `Shim.read_blocking/2`/`write_blocking/2`
+  (dirty I/O with the fd lock released across the syscall).

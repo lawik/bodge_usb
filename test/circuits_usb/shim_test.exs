@@ -23,6 +23,23 @@ defmodule CircuitsUsb.ShimTest do
       assert :ok = Shim.close(h)
     end
 
+    test "read_blocking/write_blocking mirror read/write on ordinary fds" do
+      {:ok, z} = Shim.open("/dev/zero", [:rdonly])
+      assert {:ok, <<0, 0, 0, 0>>} = Shim.read_blocking(z, 4)
+      assert :ok = Shim.close(z)
+
+      {:ok, null} = Shim.open("/dev/null", [:wronly])
+      assert {:ok, 5} = Shim.write_blocking(null, "hello")
+      assert :ok = Shim.close(null)
+    end
+
+    test "blocking I/O on a closed handle is :ebadf" do
+      {:ok, h} = Shim.open("/dev/zero", [:rdonly])
+      :ok = Shim.close(h)
+      assert {:error, :ebadf} = Shim.read_blocking(h, 4)
+      assert {:error, :ebadf} = Shim.write_blocking(h, "x")
+    end
+
     test "read returns a possibly-short binary" do
       assert {:ok, h} = Shim.open("/dev/null", [:rdonly])
       # /dev/null is immediately EOF -> empty binary, not an error.

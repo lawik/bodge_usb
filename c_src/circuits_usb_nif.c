@@ -419,6 +419,76 @@ static ERL_NIF_TERM nif_write(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
     return enif_make_tuple2(env, am_ok, enif_make_ulong(env, (unsigned long)n));
 }
 
+// read_blocking(handle, count) -> {:ok, binary} | {:error, atom}
+//
+// Same contract as read/2 but for fds whose read blocks until the *peer* acts:
+// FunctionFS/gadget endpoint files block until the host transacts (and are not
+// pollable, so enif_select cannot help). Runs on a dirty I/O scheduler and
+// releases the fd lock across the syscall via begin/end_blocking, so
+// reap/submit/close on the same handle never stall behind it; a close during
+// the read defers teardown until the read returns (unbinding the gadget makes
+// it return -ESHUTDOWN).
+static ERL_NIF_TERM nif_read_blocking(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    unsigned long count;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r))
+        return enif_make_badarg(env);
+    if (!enif_get_ulong(env, argv[1], &count))
+        return enif_make_badarg(env);
+    if (count > (16u * 1024 * 1024))
+        return enif_make_badarg(env);
+
+    ErlNifBinary bin;
+    if (!enif_alloc_binary((size_t)count, &bin))
+        return err_tuple(env, ENOMEM);
+
+    int fd = begin_blocking(r);
+    if (fd < 0) {
+        enif_release_binary(&bin);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    ssize_t n = read(fd, bin.data, (size_t)count);
+    int e = errno;
+    end_blocking(r);
+
+    if (n < 0) {
+        enif_release_binary(&bin);
+        return err_tuple(env, e);
+    }
+    if ((size_t)n != bin.size) {
+        if (!enif_realloc_binary(&bin, (size_t)n)) {
+            enif_release_binary(&bin);
+            return err_tuple(env, ENOMEM);
+        }
+    }
+    return enif_make_tuple2(env, am_ok, enif_make_binary(env, &bin));
+}
+
+// write_blocking(handle, data :: iodata) -> {:ok, bytes_written} | {:error, atom}
+// The write-side twin of read_blocking/2: dirty I/O, lock released across the
+// syscall, deferred close honored.
+static ERL_NIF_TERM nif_write_blocking(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    ErlNifBinary data;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r))
+        return enif_make_badarg(env);
+    if (!enif_inspect_iolist_as_binary(env, argv[1], &data))
+        return enif_make_badarg(env);
+
+    int fd = begin_blocking(r);
+    if (fd < 0)
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    ssize_t n = write(fd, data.data, data.size);
+    int e = errno;
+    end_blocking(r);
+
+    if (n < 0)
+        return err_tuple(env, e);
+    return enif_make_tuple2(env, am_ok, enif_make_ulong(env, (unsigned long)n));
+}
+
 // USBDEVFS_CONTROL wLength is a __u16, so transfers are bounded at 65535 bytes.
 #define CTRL_MAX_LEN 0xFFFF
 
@@ -1355,6 +1425,10 @@ static ErlNifFunc nif_funcs[] = {
     {"close", 1, nif_close, 0},
     {"read", 2, nif_read, 0},
     {"write", 2, nif_write, 0},
+    // Blocking peer-driven I/O (FunctionFS endpoint files): dirty I/O with the
+    // fd lock released across the syscall (begin/end_blocking).
+    {"read_blocking", 2, nif_read_blocking, ERL_NIF_DIRTY_JOB_IO_BOUND},
+    {"write_blocking", 2, nif_write_blocking, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"fileno", 1, nif_fileno, 0},
     // Blocking usbfs ioctls run on a dirty I/O scheduler (correctness-first,
     // per B4; the async select/reap engine in B5 supersedes the blocking path).

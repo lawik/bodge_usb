@@ -25,6 +25,9 @@ test rig (dummy_hcd, g_zero/usbtest, raw-gadget fault injection, usbmon).
 - Device-side (gadget) definition over configfs (`CircuitsUsb.Gadget`): act
   as a HID/serial/ethernet/mass-storage/... device on UDC-capable hardware,
   with chardev functions driven through the same shim tier.
+- Custom device functions over FunctionFS (`CircuitsUsb.FunctionFs`): serve
+  your own protocol from Elixir (vendor control requests as handler
+  callbacks, endpoint files driven via the shim's blocking I/O).
 
 Three supported tiers: `CircuitsUsb.Shim` (raw handle + submit/select/reap,
 no processes), `CircuitsUsb.Transfer` (one engine process per device), and

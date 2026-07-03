@@ -83,6 +83,22 @@ defmodule CircuitsUsb.Shim do
   def write(_handle, _data), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
+  Like `read/2`, but for fds whose read blocks until the *peer* acts, e.g.
+  FunctionFS gadget endpoint files (which block until the host transacts and
+  are not pollable). Runs on a dirty I/O scheduler with the fd lock released
+  across the syscall, so other operations on the handle (including `close/1`,
+  which defers teardown until this returns) never stall behind it. Each
+  in-flight call occupies one dirty scheduler; unbinding the gadget makes a
+  blocked call return `{:error, :eshutdown}`.
+  """
+  @spec read_blocking(handle(), non_neg_integer()) :: {:ok, binary()} | {:error, atom()}
+  def read_blocking(_handle, _count), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc "The write-side twin of `read_blocking/2`. Returns `{:ok, bytes_written}`."
+  @spec write_blocking(handle(), iodata()) :: {:ok, non_neg_integer()} | {:error, atom()}
+  def write_blocking(_handle, _data), do: :erlang.nif_error(:nif_not_loaded)
+
+  @doc """
   Issue a usbfs control transfer (`USBDEVFS_CONTROL`).
 
   Direction is taken from bit 7 of `request_type`:

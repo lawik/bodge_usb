@@ -171,6 +171,16 @@ modprobe libcomposite usb_f_hid
 run_mix mix test --only usbfs_gadget
 teardown_configfs_gadgets
 
+# Part C2 -- FunctionFS: the library serves a *custom* function from userspace
+# (toy vendor protocol over ep0 + bulk echo over epN) and drives it with its
+# own host tier.
+echo "== :usbfs_ffs tests (FunctionFS custom function) =="
+teardown_configfs_gadgets
+modprobe libcomposite usb_f_fs
+run_mix mix test --only usbfs_ffs
+umount /dev/ffs-circuits 2>/dev/null || true
+teardown_configfs_gadgets
+
 # Phase C -- interrupt transfers (B7) need an interrupt endpoint; g_zero has
 # none, so switch to a configfs HID gadget (interrupt IN + OUT). The gadget
 # streams a known 8-byte report which the host reads over the interrupt IN ep.

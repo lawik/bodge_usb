@@ -18,8 +18,8 @@ defmodule CircuitsUsb.Enumeration do
     defstruct [:bus, :address, :path, :descriptor]
 
     @type t :: %__MODULE__{
-            bus: pos_integer(),
-            address: pos_integer(),
+            bus: pos_integer() | nil,
+            address: pos_integer() | nil,
             path: String.t(),
             descriptor: {:ok, CircuitsUsb.Descriptor.Device.t()} | {:error, term()}
           }

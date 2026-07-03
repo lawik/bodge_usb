@@ -138,6 +138,7 @@ static ERL_NIF_TERM errno_atom(ErlNifEnv *env, int e) {
     case ESHUTDOWN:  name = "eshutdown"; break;
     case EPROTO:     name = "eproto"; break;
     case EILSEQ:     name = "eilseq"; break;
+    case EXDEV:      name = "exdev"; break;      // USB isoc: partial completion
     case ENODATA:    name = "enodata"; break;   // GETDRIVER: no driver bound
     case ETIME:      name = "etime"; break;      // USB isoc/interrupt timeout
     case EREMOTEIO:  name = "eremoteio"; break;  // USB short read
@@ -901,7 +902,12 @@ static ERL_NIF_TERM nif_submit_iso(ErlNifEnv *env, int argc, const ERL_NIF_TERM 
             enif_free(u);
             return err_tuple(env, ENOMEM);
         }
-        if (!is_in)
+        if (is_in)
+            // Reap returns the whole buffer for isoc IN, but the kernel only
+            // writes each packet's actual_length bytes -- zero the gaps so
+            // uninitialized heap never leaks into the returned binary.
+            memset(u->buffer, 0, total);
+        else
             memcpy(u->buffer, out_data.data, total);
     }
     u->kurb.type = USBDEVFS_URB_TYPE_ISO;
@@ -1043,7 +1049,8 @@ static ERL_NIF_TERM nif_reap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
             if (u->is_in) {
                 ErlNifBinary b;
                 if (!enif_alloc_binary(u->buffer_len, &b)) {
-                    data = enif_make_int(env, u->kurb.actual_length);
+                    // Keep the IN contract (a binary), just empty on OOM.
+                    (void)enif_make_new_binary(env, 0, &data);
                 } else {
                     if (u->buffer_len)
                         memcpy(b.data, u->buffer, u->buffer_len);
@@ -1057,8 +1064,8 @@ static ERL_NIF_TERM nif_reap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
             size_t got = u->kurb.actual_length > 0 ? (size_t)u->kurb.actual_length : 0;
             ErlNifBinary b;
             if (!enif_alloc_binary(got, &b)) {
-                // Drop this completion's data but keep draining/cleanup.
-                payload = enif_make_int(env, u->kurb.actual_length);
+                // Keep the IN contract (a binary), just empty on OOM.
+                (void)enif_make_new_binary(env, 0, &payload);
             } else {
                 if (got)
                     memcpy(b.data, u->buffer, got);
@@ -1148,6 +1155,13 @@ static int load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info) {
     return 0;
 }
 
+// Re-take the resource type (and re-init atoms) so hot code upgrade works.
+static int upgrade(ErlNifEnv *env, void **priv_data, void **old_priv_data,
+                   ERL_NIF_TERM load_info) {
+    (void)old_priv_data;
+    return load(env, priv_data, load_info);
+}
+
 static ErlNifFunc nif_funcs[] = {
     {"open", 2, nif_open, 0},
     {"close", 1, nif_close, 0},
@@ -1180,4 +1194,4 @@ static ErlNifFunc nif_funcs[] = {
     {"netlink_uevent_open", 0, nif_netlink_uevent_open, 0},
 };
 
-ERL_NIF_INIT(Elixir.CircuitsUsb.Shim, nif_funcs, load, NULL, NULL, NULL)
+ERL_NIF_INIT(Elixir.CircuitsUsb.Shim, nif_funcs, load, NULL, upgrade, NULL)

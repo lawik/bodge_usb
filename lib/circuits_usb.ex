@@ -106,7 +106,37 @@ defmodule CircuitsUsb do
   def interrupt_out(device, endpoint, data, timeout \\ 1000, opts \\ []),
     do: Transfer.interrupt_out(device, endpoint, data, timeout, opts)
 
-  @doc "Control IN transfer. See `CircuitsUsb.Transfer.control_in/6`."
+  @doc "Control transfer with an explicit `bmRequestType` (class/vendor/etc.). See `CircuitsUsb.Transfer.control_transfer/7`."
+  @spec control_transfer(
+          device(),
+          0..255,
+          0..255,
+          0..0xFFFF,
+          0..0xFFFF,
+          iodata() | non_neg_integer(),
+          timeout()
+        ) :: {:ok, binary()} | {:ok, non_neg_integer()} | {:error, atom()}
+  def control_transfer(
+        device,
+        request_type,
+        request,
+        value,
+        index,
+        data_or_length,
+        timeout \\ 1000
+      ),
+      do:
+        Transfer.control_transfer(
+          device,
+          request_type,
+          request,
+          value,
+          index,
+          data_or_length,
+          timeout
+        )
+
+  @doc "Standard device-recipient control IN. See `CircuitsUsb.Transfer.control_in/6`."
   @spec control_in(device(), 0..255, 0..0xFFFF, 0..0xFFFF, non_neg_integer(), timeout()) ::
           {:ok, binary()} | {:error, atom()}
   def control_in(device, request, value, index, length, timeout \\ 1000),

@@ -16,9 +16,12 @@ defmodule CircuitsUsb.ApiTest do
         assert CircuitsUsb.detach_driver(dev, iface) in [:ok, {:error, :enodata}]
         assert :ok = CircuitsUsb.claim_interface(dev, iface)
 
-        # Bulk source/sink.
+        # Bulk source/sink. The harness loads g_zero with pattern=1, so the
+        # source emits a mod-63 ramp -- assert the actual content, not just the
+        # length, so corruption/offset/stale-buffer bugs can't slip through.
         assert {:ok, data} = CircuitsUsb.bulk_in(dev, ep_in, 512)
-        assert byte_size(data) == 512
+        expected = for i <- 0..511, into: <<>>, do: <<rem(i, 63)>>
+        assert data == expected
         assert {:ok, 512} = CircuitsUsb.bulk_out(dev, ep_out, data)
 
         # Control message: read the device descriptor back.

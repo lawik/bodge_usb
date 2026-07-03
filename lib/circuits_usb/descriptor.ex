@@ -141,6 +141,12 @@ defmodule CircuitsUsb.Descriptor do
 
   @doc """
   Parse just the 18-byte device descriptor (ignores any trailing bytes).
+
+  Note: reading a usbfs node returns the *device* descriptor with its multibyte
+  fields (`bcdUSB`, `idVendor`, `idProduct`, `bcdDevice`) already byte-swapped to
+  host order by the kernel; we read them little-endian, which is correct on
+  little-endian hosts (the common case). Configuration descriptors are raw
+  little-endian and parse correctly everywhere.
   """
   @spec parse_device(binary()) :: {:ok, Device.t()} | {:error, reason()}
   def parse_device(binary) when is_binary(binary) and byte_size(binary) < 18,
@@ -264,19 +270,32 @@ defmodule CircuitsUsb.Descriptor do
   end
 
   defp attach(%{type: @dt_interface} = raw, [cfg | rest]) do
-    iface = %{interface: parse_interface_header(raw), endpoints: [], extra: []}
-    [%{cfg | interfaces: [iface | cfg.interfaces]} | rest]
+    case parse_interface_header(raw) do
+      nil ->
+        # undersized/malformed interface descriptor: keep as config extra rather
+        # than fabricate an all-nil struct that violates the typespec.
+        [%{cfg | extra: [strip(raw) | cfg.extra]} | rest]
+
+      %Interface{} = header ->
+        iface = %{interface: header, endpoints: [], extra: []}
+        [%{cfg | interfaces: [iface | cfg.interfaces]} | rest]
+    end
   end
 
   defp attach(%{type: @dt_endpoint} = raw, [cfg | rest]) do
-    case cfg.interfaces do
-      [iface | ifaces] ->
-        iface = %{iface | endpoints: [parse_endpoint(raw) | iface.endpoints]}
+    case {cfg.interfaces, parse_endpoint(raw)} do
+      {[iface | ifaces], %Endpoint{} = ep} ->
+        iface = %{iface | endpoints: [ep | iface.endpoints]}
         [%{cfg | interfaces: [iface | ifaces]} | rest]
 
-      [] ->
+      {[iface | ifaces], nil} ->
+        # undersized endpoint descriptor: attach as interface extra.
+        iface = %{iface | extra: [strip(raw) | iface.extra]}
+        [%{cfg | interfaces: [iface | ifaces]} | rest]
+
+      {[], _} ->
         # endpoint before any interface: keep it as config-level extra
-        [%{cfg | extra: [raw | cfg.extra]} | rest]
+        [%{cfg | extra: [strip(raw) | cfg.extra]} | rest]
     end
   end
 
@@ -339,7 +358,7 @@ defmodule CircuitsUsb.Descriptor do
     }
   end
 
-  defp parse_interface_header(_), do: %Interface{}
+  defp parse_interface_header(_), do: nil
 
   defp parse_endpoint(%{
          data: <<_bl, _bt, address, attributes, max_packet::little-16, interval, _::binary>>
@@ -359,7 +378,7 @@ defmodule CircuitsUsb.Descriptor do
     }
   end
 
-  defp parse_endpoint(_), do: %Endpoint{}
+  defp parse_endpoint(_), do: nil
 
   defp strip(%{type: type, length: length, data: data}),
     do: %{type: type, length: length, data: data}

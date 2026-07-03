@@ -67,9 +67,19 @@ EOF
   log "created cloud-init seed $SEED"
 }
 
+BASE_IMAGE_URL="${CIRCUITS_VM_IMAGE_URL:-https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img}"
+
+fetch_base_image() {
+  [ -f "$BASE" ] && return 0
+  command -v curl >/dev/null 2>&1 || die "curl needed to download the base image"
+  log "downloading base cloud image (~600MB, one time): $BASE_IMAGE_URL"
+  curl -L --fail --retry 3 -C - -o "$BASE.part" "$BASE_IMAGE_URL" || die "image download failed"
+  mv "$BASE.part" "$BASE"
+}
+
 make_overlay() {
   [ -f "$OVERLAY" ] && return 0
-  [ -f "$BASE" ] || die "base image $BASE not present (download it first)"
+  fetch_base_image
   qemu-img create -f qcow2 -F qcow2 -b "$BASE" "$OVERLAY" 20G >/dev/null
   log "created disk overlay $OVERLAY (20G, backed by base)"
 }

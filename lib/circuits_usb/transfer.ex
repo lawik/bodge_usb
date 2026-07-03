@@ -13,6 +13,15 @@ defmodule CircuitsUsb.Transfer do
   at once -- the engine pipelines them. Per-transfer timeouts are enforced in the
   engine by cancelling (`discard`) the URB, since async URBs have no kernel-level
   timeout.
+
+  ## Caveats
+
+    * A `timeout` of `0` means *no timeout*: no engine timer is armed and the
+      kernel blocks indefinitely. Prefer a finite timeout.
+    * Control transfers (`control_transfer/7` and friends) are synchronous ioctls
+      run inside the GenServer, so a slow or NAKing control request blocks the
+      engine (including reaping of other in-flight transfers) for its duration.
+      A `timeout` of `0` on a control transfer can wedge the engine; don't.
   """
 
   use GenServer
@@ -68,18 +77,47 @@ defmodule CircuitsUsb.Transfer do
   @spec set_interface(server(), non_neg_integer(), non_neg_integer()) :: :ok | {:error, atom()}
   def set_interface(server, iface, alt), do: GenServer.call(server, {:set_interface, iface, alt})
 
-  @doc "Control IN transfer (synchronous). See `CircuitsUsb.Shim.control_in/6`."
+  @doc """
+  Control transfer with an explicit `request_type` (`bmRequestType`), for
+  class/vendor and non-device-recipient requests. Direction is bit 7 of
+  `request_type` (IN takes a length, OUT takes iodata). Synchronous.
+  """
+  @spec control_transfer(
+          server(),
+          0..255,
+          0..255,
+          0..0xFFFF,
+          0..0xFFFF,
+          iodata() | non_neg_integer(),
+          timeout()
+        ) :: {:ok, binary()} | {:ok, non_neg_integer()} | {:error, atom()}
+  def control_transfer(
+        server,
+        request_type,
+        request,
+        value,
+        index,
+        data_or_length,
+        timeout_ms \\ 1000
+      ),
+      do:
+        GenServer.call(
+          server,
+          {:control, request_type, request, value, index, data_or_length, timeout_ms},
+          :infinity
+        )
+
+  @doc "Standard device-recipient control IN. See `control_transfer/7`."
   @spec control_in(server(), 0..255, 0..0xFFFF, 0..0xFFFF, non_neg_integer(), timeout()) ::
           {:ok, binary()} | {:error, atom()}
   def control_in(server, request, value, index, length, timeout_ms \\ 1000),
-    do:
-      GenServer.call(server, {:control_in, request, value, index, length, timeout_ms}, :infinity)
+    do: control_transfer(server, 0x80, request, value, index, length, timeout_ms)
 
-  @doc "Control OUT transfer (synchronous). See `CircuitsUsb.Shim.control_out/6`."
+  @doc "Standard device-recipient control OUT. See `control_transfer/7`."
   @spec control_out(server(), 0..255, 0..0xFFFF, 0..0xFFFF, iodata(), timeout()) ::
           {:ok, non_neg_integer()} | {:error, atom()}
   def control_out(server, request, value, index, data, timeout_ms \\ 1000),
-    do: GenServer.call(server, {:control_out, request, value, index, data, timeout_ms}, :infinity)
+    do: control_transfer(server, 0x00, request, value, index, data, timeout_ms)
 
   @doc """
   Bulk IN transfer on an IN endpoint address (bit 7 set). Blocks the caller
@@ -89,7 +127,11 @@ defmodule CircuitsUsb.Transfer do
   @spec bulk_in(server(), 0..255, non_neg_integer(), timeout()) ::
           {:ok, binary()} | {:error, term()}
   def bulk_in(server, endpoint, length, timeout \\ 1000) do
-    GenServer.call(server, {:transfer, :bulk, endpoint, length, timeout, []}, call_timeout(timeout))
+    GenServer.call(
+      server,
+      {:transfer, :bulk, endpoint, length, timeout, []},
+      call_timeout(timeout)
+    )
   end
 
   @doc """
@@ -101,7 +143,11 @@ defmodule CircuitsUsb.Transfer do
   @spec bulk_out(server(), 0..255, iodata(), timeout(), keyword()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def bulk_out(server, endpoint, data, timeout \\ 1000, opts \\ []) do
-    GenServer.call(server, {:transfer, :bulk, endpoint, data, timeout, opts}, call_timeout(timeout))
+    GenServer.call(
+      server,
+      {:transfer, :bulk, endpoint, data, timeout, opts},
+      call_timeout(timeout)
+    )
   end
 
   @doc """
@@ -144,6 +190,12 @@ defmodule CircuitsUsb.Transfer do
 
   @impl true
   def init(opts) do
+    # Trap exits so a crashing linked owner still runs terminate/2 (which closes
+    # the fd). Without this, an armed enif_select pins the resource -- and thus
+    # the fd and URB memory -- until VM shutdown, since the GC destructor cannot
+    # run while a select is outstanding.
+    Process.flag(:trap_exit, true)
+
     case open(opts) do
       {:ok, handle} ->
         {:ok, %{handle: handle, ref: make_ref(), armed: false, next_tag: 1, pending: %{}}}
@@ -192,16 +244,26 @@ defmodule CircuitsUsb.Transfer do
   def handle_call({:set_interface, iface, alt}, _from, state),
     do: {:reply, Shim.set_interface(state.handle, iface, alt), state}
 
-  def handle_call({:control_in, request, value, index, length, timeout}, _from, state),
-    do: {:reply, Shim.control_in(state.handle, request, value, index, length, timeout), state}
-
-  def handle_call({:control_out, request, value, index, data, timeout}, _from, state),
-    do: {:reply, Shim.control_out(state.handle, request, value, index, data, timeout), state}
+  def handle_call({:control, request_type, request, value, index, dl, timeout}, _from, state),
+    do:
+      {:reply,
+       Shim.control_transfer(state.handle, request_type, request, value, index, dl, timeout),
+       state}
 
   def handle_call({:transfer, kind, endpoint, data_or_length, timeout, opts}, from, state) do
     tag = state.next_tag
 
-    case submit(kind, state.handle, tag, endpoint, data_or_length, opts) do
+    # A direction/payload mismatch (e.g. an IN address with iodata, or vice
+    # versa) makes the NIF raise badarg; catch it so it becomes a typed error
+    # for this caller instead of crashing the engine and every in-flight caller.
+    result =
+      try do
+        submit(kind, state.handle, tag, endpoint, data_or_length, opts)
+      rescue
+        ArgumentError -> {:error, :einval}
+      end
+
+    case result do
       :ok ->
         timer =
           if is_integer(timeout) and timeout > 0,
@@ -222,6 +284,9 @@ defmodule CircuitsUsb.Transfer do
 
   # Stale select message (ref from a previous arm); ignore.
   def handle_info({:select, _handle, _other_ref, _}, state), do: {:noreply, state}
+
+  # A trapped exit from the linked owner: shut down so terminate/2 closes the fd.
+  def handle_info({:EXIT, _pid, reason}, state), do: {:stop, reason, state}
 
   def handle_info({:timeout, tag}, state) do
     case Map.get(state.pending, tag) do
@@ -286,7 +351,14 @@ defmodule CircuitsUsb.Transfer do
     end
   end
 
-  defp result_for(%{timed_out: true}, _status, _payload), do: {:error, :timeout}
+  # A genuine discard reaps as the cancellation signature (ENOENT or ECONNRESET,
+  # per the kernel's timing -- libusb treats both as cancelled), which we report
+  # as :timeout. If our timer merely raced a real completion (the discard was a
+  # no-op because the URB already finished), honor the actual result instead of
+  # dropping its data.
+  defp result_for(%{timed_out: true}, status, _payload) when status in [:econnreset, :enoent],
+    do: {:error, :timeout}
+
   defp result_for(_pending, :ok, payload), do: {:ok, payload}
   defp result_for(_pending, status, _payload), do: {:error, status}
 end

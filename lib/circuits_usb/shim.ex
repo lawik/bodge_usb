@@ -203,7 +203,14 @@ defmodule CircuitsUsb.Shim do
   on an OUT transfer. The interface must be claimed. Pair with `select/2` +
   `reap/1`. Prefer `submit_bulk/4` and `submit_interrupt/4`.
   """
-  @spec submit_urb(handle(), non_neg_integer(), 1..3, 0..255, iodata() | non_neg_integer(), 0..0x40) ::
+  @spec submit_urb(
+          handle(),
+          non_neg_integer(),
+          1..3,
+          0..255,
+          iodata() | non_neg_integer(),
+          0..0x40
+        ) ::
           :ok | {:error, atom()}
   def submit_urb(_h, _tag, _urb_type, _endpoint, _data_or_length, _flags),
     do: :erlang.nif_error(:nif_not_loaded)
@@ -215,7 +222,13 @@ defmodule CircuitsUsb.Shim do
     do: submit_urb(h, tag, @urb_type_bulk, endpoint, data_or_length, flags(opts))
 
   @doc "Submit an interrupt URB. See `submit_bulk/5`."
-  @spec submit_interrupt(handle(), non_neg_integer(), 0..255, iodata() | non_neg_integer(), keyword()) ::
+  @spec submit_interrupt(
+          handle(),
+          non_neg_integer(),
+          0..255,
+          iodata() | non_neg_integer(),
+          keyword()
+        ) ::
           :ok | {:error, atom()}
   def submit_interrupt(h, tag, endpoint, data_or_length, opts \\ []),
     do: submit_urb(h, tag, @urb_type_interrupt, endpoint, data_or_length, flags(opts))

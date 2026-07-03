@@ -12,8 +12,10 @@ test rig (dummy_hcd, g_zero/usbtest, raw-gadget fault injection, usbmon).
 
 - Enumeration and defensive descriptor parsing (device/config/interface/
   endpoint/string) into structs.
-- Control, bulk, interrupt, and isochronous transfers on an async
-  submit/select/reap engine (`enif_select`-driven, no blocked schedulers).
+- Control, bulk, and interrupt transfers through an async submit/select/reap
+  engine (`enif_select`-driven, no blocked schedulers), with per-transfer
+  timeouts and cancellation. Isochronous transfers (per-packet descriptors) via
+  the lower-level shim (`CircuitsUsb.Shim.submit_iso/5`).
 - Interface claim/release and kernel-driver detach/reattach.
 - Endpoint-stall recovery (`clear_halt`), device reset, and typed handling of
   mid-transfer disconnect.

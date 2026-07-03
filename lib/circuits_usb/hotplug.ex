@@ -18,6 +18,8 @@ defmodule CircuitsUsb.Hotplug do
 
   alias CircuitsUsb.Shim
 
+  require Logger
+
   @type event :: %{
           action: :add | :remove | :bind | :unbind | :change | :unknown,
           busnum: integer() | nil,
@@ -50,8 +52,9 @@ defmodule CircuitsUsb.Hotplug do
   def init(opts) do
     case Shim.netlink_uevent_open() do
       {:ok, handle} ->
-        subscribers = opts |> Keyword.fetch!(:notify) |> List.wrap() |> MapSet.new()
-        {:ok, arm(%{handle: handle, ref: make_ref(), subscribers: subscribers})}
+        subscribers = opts |> Keyword.fetch!(:notify) |> List.wrap()
+        Enum.each(subscribers, &Process.monitor/1)
+        {:ok, arm(%{handle: handle, ref: make_ref(), subscribers: MapSet.new(subscribers)})}
 
       {:error, reason} ->
         {:stop, reason}
@@ -60,6 +63,7 @@ defmodule CircuitsUsb.Hotplug do
 
   @impl true
   def handle_call({:subscribe, pid}, _from, state) do
+    Process.monitor(pid)
     {:reply, :ok, %{state | subscribers: MapSet.put(state.subscribers, pid)}}
   end
 
@@ -71,6 +75,10 @@ defmodule CircuitsUsb.Hotplug do
 
   # Stale select ref; ignore.
   def handle_info({:select, _handle, _other, _}, state), do: {:noreply, state}
+
+  # Drop subscribers that have exited.
+  def handle_info({:DOWN, _ref, :process, pid, _reason}, state),
+    do: {:noreply, %{state | subscribers: MapSet.delete(state.subscribers, pid)}}
 
   @impl true
   def terminate(_reason, state) do
@@ -95,7 +103,15 @@ defmodule CircuitsUsb.Hotplug do
   end
 
   defp arm(state) do
-    Shim.select_read(state.handle, state.ref)
+    case Shim.select_read(state.handle, state.ref) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        # The watcher would otherwise go silently deaf.
+        Logger.warning("CircuitsUsb.Hotplug: select_read failed: #{inspect(reason)}")
+    end
+
     state
   end
 

@@ -66,7 +66,9 @@ cleanup() {
   rmmod dummy_hcd 2>/dev/null || true
 }
 trap cleanup EXIT
-modprobe g_zero
+# pattern=1 makes the source/sink emit a mod-63 ramp instead of all zeros, so the
+# bulk data-integrity assertions can actually catch corruption/offset bugs.
+modprobe g_zero pattern=1
 
 node=""
 for _ in $(seq 1 50); do

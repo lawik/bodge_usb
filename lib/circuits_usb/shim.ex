@@ -49,12 +49,19 @@ defmodule CircuitsUsb.Shim do
   @doc """
   Read up to `count` bytes. Returns `{:ok, binary}` (possibly shorter than
   `count`, including empty on EOF) or `{:error, errno_atom}`.
+
+  Runs inline on a normal scheduler, so it assumes a fast fd: a usbfs node
+  (descriptor reads return immediately) or the netlink uevent socket paired with
+  `select_read/2` (only read when readiness fired). Do not point it at a fd whose
+  read can block indefinitely (a pipe, a socket with no data) or it will stall a
+  scheduler thread.
   """
   @spec read(handle(), non_neg_integer()) :: {:ok, binary()} | {:error, atom()}
   def read(_handle, _count), do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
-  Write `data`. Returns `{:ok, bytes_written}` or `{:error, errno_atom}`.
+  Write `data`. Returns `{:ok, bytes_written}` or `{:error, errno_atom}`. Like
+  `read/2`, runs inline and assumes a non-blocking fd.
   """
   @spec write(handle(), iodata()) :: {:ok, non_neg_integer()} | {:error, atom()}
   def write(_handle, _data), do: :erlang.nif_error(:nif_not_loaded)
@@ -234,6 +241,26 @@ defmodule CircuitsUsb.Shim do
     do: submit_urb(h, tag, @urb_type_interrupt, endpoint, data_or_length, flags(opts))
 
   defp flags(opts), do: if(opts[:zero_packet], do: @urb_zero_packet, else: 0)
+
+  @doc """
+  Submit a control transfer as an async URB (`USBDEVFS_URB_TYPE_CONTROL`) so the
+  caller never blocks a scheduler on it. Direction is bit 7 of `request_type`
+  (`0x80` = IN): IN takes a read length and reaps as `{tag, status, binary}`; OUT
+  takes iodata and reaps as `{tag, status, bytes_written}`. Pair with `select/2`
+  + `reap/1`; the `CircuitsUsb.Transfer` engine drives this. For a one-shot
+  synchronous control transfer use `control_transfer/7` instead.
+  """
+  @spec submit_control(
+          handle(),
+          non_neg_integer(),
+          0..255,
+          0..255,
+          0..0xFFFF,
+          0..0xFFFF,
+          iodata() | non_neg_integer()
+        ) :: :ok | {:error, atom()}
+  def submit_control(_h, _tag, _request_type, _request, _value, _index, _data_or_length),
+    do: :erlang.nif_error(:nif_not_loaded)
 
   @doc """
   Submit an isochronous URB (`USBDEVFS_URB_TYPE_ISO`, scheduled ASAP).

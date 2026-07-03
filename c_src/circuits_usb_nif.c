@@ -39,6 +39,7 @@
 typedef struct Urb {
     unsigned char *buffer;
     size_t buffer_len;
+    size_t data_off;  // offset of transfer data in buffer (8 for control's setup, else 0)
     int is_in;
     int num_packets; // 0 for bulk/interrupt; >0 for isochronous
     ErlNifUInt64 tag; // caller correlation id
@@ -52,7 +53,8 @@ typedef struct {
     ErlNifMutex *lock;  // serializes fd use vs close (no double-close/UAF)
     Urb *inflight;      // doubly-linked list of submitted-but-unreaped URBs
     int select_active;  // enif_select(WRITE) currently armed
-    int closing;        // close requested; fd torn down in the stop callback
+    int closing;        // close requested; fd torn down once quiescent
+    int busy;           // blocking ioctls in flight that released the lock
 } UsbFd;
 
 static ErlNifResourceType *usb_fd_type = NULL;
@@ -102,6 +104,37 @@ static void teardown_fd(UsbFd *r) {
         u = n;
     }
     r->inflight = NULL;
+}
+
+// Finalize a deferred close: actually tear the fd down once nothing is using it
+// (no select armed, no blocking ioctl in flight). Call with r->lock held.
+static void try_close_locked(UsbFd *r) {
+    if (r->closing && !r->select_active && r->busy == 0)
+        teardown_fd(r);
+}
+
+// Take a reference for a blocking ioctl and hand back the fd to use WITHOUT
+// holding the lock across the syscall -- otherwise a normal-scheduler NIF
+// (reap/submit/close) on the same handle would stall behind it, violating the
+// scheduler contract. Returns -1 if the fd is closed or a close is pending.
+static int begin_blocking(UsbFd *r) {
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0 || r->closing) {
+        enif_mutex_unlock(r->lock);
+        return -1;
+    }
+    r->busy++;
+    int fd = r->fd;
+    enif_mutex_unlock(r->lock);
+    return fd;
+}
+
+// Release a begin_blocking() reference; finalize a close that waited on us.
+static void end_blocking(UsbFd *r) {
+    enif_mutex_lock(r->lock);
+    r->busy--;
+    try_close_locked(r);
+    enif_mutex_unlock(r->lock);
 }
 
 static ERL_NIF_TERM mk_atom(ErlNifEnv *env, const char *s) {
@@ -167,7 +200,10 @@ static void usb_fd_stop(ErlNifEnv *env, void *obj, ErlNifEvent event, int is_dir
     UsbFd *r = (UsbFd *)obj;
     enif_mutex_lock(r->lock);
     r->select_active = 0;
-    teardown_fd(r);
+    // A blocking ioctl may still be mid-syscall (it released the lock); if so,
+    // its end_blocking() does the teardown. Otherwise finalize here.
+    if (r->busy == 0)
+        teardown_fd(r);
     enif_mutex_unlock(r->lock);
 }
 
@@ -234,6 +270,7 @@ static ERL_NIF_TERM wrap_fd(ErlNifEnv *env, int fd) {
     r->inflight = NULL;
     r->select_active = 0;
     r->closing = 0;
+    r->busy = 0;
     r->lock = enif_mutex_create("circuits_usb_fd");
     if (!r->lock) {
         close(fd);
@@ -306,20 +343,11 @@ static ERL_NIF_TERM nif_close(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
         return am_ok;
     }
 
-    int rc = close(fd);
-    int e = errno;
-    r->fd = -1;
-    Urb *u = r->inflight;
-    while (u) {
-        Urb *n = u->next;
-        urb_free(u);
-        u = n;
-    }
-    r->inflight = NULL;
+    // Not selected on: close now if quiescent. If a blocking ioctl is mid-flight
+    // (it released the lock and is using the fd), defer the teardown to its
+    // end_blocking() so we never close the fd out from under an active syscall.
+    try_close_locked(r);
     enif_mutex_unlock(r->lock);
-
-    if (rc != 0)
-        return err_tuple(env, e);
     return am_ok;
 }
 
@@ -455,15 +483,14 @@ static ERL_NIF_TERM nif_control_transfer(ErlNifEnv *env, int argc, const ERL_NIF
     ctrl.data = buf; // pointer fixup: real address at the known offset
 
     int n, e = 0;
-    enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
-        enif_mutex_unlock(r->lock);
+    int fd = begin_blocking(r);
+    if (fd < 0) {
         enif_free(buf);
         return enif_make_tuple2(env, am_error, am_ebadf);
     }
-    n = ioctl(r->fd, USBDEVFS_CONTROL, &ctrl);
+    n = ioctl(fd, USBDEVFS_CONTROL, &ctrl);
     e = errno;
-    enif_mutex_unlock(r->lock);
+    end_blocking(r);
 
     if (n < 0) {
         enif_free(buf);
@@ -505,14 +532,12 @@ static ERL_NIF_TERM nif_set_interface(ErlNifEnv *env, int argc, const ERL_NIF_TE
     si.altsetting = alt;
 
     int rc, e = 0;
-    enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
-        enif_mutex_unlock(r->lock);
+    int fd = begin_blocking(r);
+    if (fd < 0)
         return enif_make_tuple2(env, am_error, am_ebadf);
-    }
-    rc = ioctl(r->fd, USBDEVFS_SETINTERFACE, &si);
+    rc = ioctl(fd, USBDEVFS_SETINTERFACE, &si);
     e = errno;
-    enif_mutex_unlock(r->lock);
+    end_blocking(r);
 
     if (rc < 0)
         return err_tuple(env, e);
@@ -572,15 +597,14 @@ static ERL_NIF_TERM nif_bulk_transfer(ErlNifEnv *env, int argc, const ERL_NIF_TE
     bt.data = buf; // pointer fixup
 
     int n, e = 0;
-    enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
-        enif_mutex_unlock(r->lock);
+    int fd = begin_blocking(r);
+    if (fd < 0) {
         enif_free(buf);
         return enif_make_tuple2(env, am_error, am_ebadf);
     }
-    n = ioctl(r->fd, USBDEVFS_BULK, &bt);
+    n = ioctl(fd, USBDEVFS_BULK, &bt);
     e = errno;
-    enif_mutex_unlock(r->lock);
+    end_blocking(r);
 
     if (n < 0) {
         enif_free(buf);
@@ -607,7 +631,7 @@ static ERL_NIF_TERM nif_bulk_transfer(ErlNifEnv *env, int argc, const ERL_NIF_TE
 // A fast fd bookkeeping ioctl whose only argument is an unsigned int passed by
 // reference (claim/release interface, clear halt). Runs inline.
 static ERL_NIF_TERM uint_ioctl(ErlNifEnv *env, const ERL_NIF_TERM argv[],
-                               unsigned long request) {
+                               unsigned long request, int blocking) {
     UsbFd *r;
     unsigned value;
     if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
@@ -616,14 +640,26 @@ static ERL_NIF_TERM uint_ioctl(ErlNifEnv *env, const ERL_NIF_TERM argv[],
 
     unsigned int arg = value;
     int rc, e = 0;
-    enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
+    if (blocking) {
+        // Drives a device round-trip (CLEAR_HALT); release the lock so a
+        // normal-scheduler NIF on this fd never stalls behind the syscall.
+        int fd = begin_blocking(r);
+        if (fd < 0)
+            return enif_make_tuple2(env, am_error, am_ebadf);
+        rc = ioctl(fd, request, &arg);
+        e = errno;
+        end_blocking(r);
+    } else {
+        // Fast fd bookkeeping (claim/release): a brief lock is fine.
+        enif_mutex_lock(r->lock);
+        if (r->fd < 0) {
+            enif_mutex_unlock(r->lock);
+            return enif_make_tuple2(env, am_error, am_ebadf);
+        }
+        rc = ioctl(r->fd, request, &arg);
+        e = errno;
         enif_mutex_unlock(r->lock);
-        return enif_make_tuple2(env, am_error, am_ebadf);
     }
-    rc = ioctl(r->fd, request, &arg);
-    e = errno;
-    enif_mutex_unlock(r->lock);
 
     if (rc < 0)
         return err_tuple(env, e);
@@ -633,13 +669,13 @@ static ERL_NIF_TERM uint_ioctl(ErlNifEnv *env, const ERL_NIF_TERM argv[],
 // claim_interface(handle, interface) -> :ok | {:error, atom}
 static ERL_NIF_TERM nif_claim_interface(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
-    return uint_ioctl(env, argv, USBDEVFS_CLAIMINTERFACE);
+    return uint_ioctl(env, argv, USBDEVFS_CLAIMINTERFACE, 0);
 }
 
 // release_interface(handle, interface) -> :ok | {:error, atom}
 static ERL_NIF_TERM nif_release_interface(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
-    return uint_ioctl(env, argv, USBDEVFS_RELEASEINTERFACE);
+    return uint_ioctl(env, argv, USBDEVFS_RELEASEINTERFACE, 0);
 }
 
 // ---- kernel driver detach/reattach (B6) --------------------------------
@@ -695,15 +731,15 @@ static ERL_NIF_TERM driver_ioctl(ErlNifEnv *env, const ERL_NIF_TERM argv[], int 
     cmd.ioctl_code = nested_code;
     cmd.data = NULL;
 
+    // Detach/attach drive the kernel driver's disconnect/probe: blocking, so
+    // release the lock across the syscall like the other dirty ioctls.
     int rc, e = 0;
-    enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
-        enif_mutex_unlock(r->lock);
+    int fd = begin_blocking(r);
+    if (fd < 0)
         return enif_make_tuple2(env, am_error, am_ebadf);
-    }
-    rc = ioctl(r->fd, USBDEVFS_IOCTL, &cmd);
+    rc = ioctl(fd, USBDEVFS_IOCTL, &cmd);
     e = errno;
-    enif_mutex_unlock(r->lock);
+    end_blocking(r);
 
     if (rc < 0)
         return err_tuple(env, e);
@@ -721,7 +757,7 @@ static ERL_NIF_TERM nif_detach_driver(ErlNifEnv *env, int argc, const ERL_NIF_TE
 // ENDPOINT_HALT). Drives a control request, so dirty I/O.
 static ERL_NIF_TERM nif_clear_halt(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
     (void)argc;
-    return uint_ioctl(env, argv, USBDEVFS_CLEAR_HALT);
+    return uint_ioctl(env, argv, USBDEVFS_CLEAR_HALT, 1);
 }
 
 // reset(handle) -> :ok | {:error, atom}
@@ -734,14 +770,12 @@ static ERL_NIF_TERM nif_reset(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[
         return enif_make_badarg(env);
 
     int rc, e = 0;
-    enif_mutex_lock(r->lock);
-    if (r->fd < 0) {
-        enif_mutex_unlock(r->lock);
+    int fd = begin_blocking(r);
+    if (fd < 0)
         return enif_make_tuple2(env, am_error, am_ebadf);
-    }
-    rc = ioctl(r->fd, USBDEVFS_RESET);
+    rc = ioctl(fd, USBDEVFS_RESET);
     e = errno;
-    enif_mutex_unlock(r->lock);
+    end_blocking(r);
 
     if (rc < 0)
         return err_tuple(env, e);
@@ -823,6 +857,93 @@ static ERL_NIF_TERM nif_submit(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv
     u->kurb.flags = flags;
     u->kurb.buffer = u->buffer;
     u->kurb.buffer_length = (int)len;
+    u->kurb.usercontext = u;
+
+    enif_mutex_lock(r->lock);
+    if (r->fd < 0) {
+        enif_mutex_unlock(r->lock);
+        urb_free(u);
+        return enif_make_tuple2(env, am_error, am_ebadf);
+    }
+    int rc = ioctl(r->fd, USBDEVFS_SUBMITURB, &u->kurb);
+    int e = errno;
+    if (rc < 0) {
+        enif_mutex_unlock(r->lock);
+        urb_free(u);
+        return err_tuple(env, e);
+    }
+    urb_link(r, u);
+    enif_mutex_unlock(r->lock);
+    return am_ok;
+}
+
+// Submit a control transfer as an async URB so the engine never blocks on it.
+// The buffer is [8-byte setup packet][wLength data]; the kernel reports the data
+// length (excluding setup) in actual_length, and reap reads IN data at +8.
+// args: (handle, tag, bmRequestType, bRequest, wValue, wIndex, data_or_length)
+static ERL_NIF_TERM nif_submit_control(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]) {
+    (void)argc;
+    UsbFd *r;
+    ErlNifUInt64 tag;
+    unsigned rtype, req, wvalue, windex;
+    if (!enif_get_resource(env, argv[0], usb_fd_type, (void **)&r) ||
+        !enif_get_uint64(env, argv[1], &tag) ||
+        !get_bounded(env, argv[2], 0xFF, &rtype) ||
+        !get_bounded(env, argv[3], 0xFF, &req) ||
+        !get_bounded(env, argv[4], 0xFFFF, &wvalue) ||
+        !get_bounded(env, argv[5], 0xFFFF, &windex))
+        return enif_make_badarg(env);
+
+    int is_in = (rtype & 0x80) != 0;
+
+    ErlNifBinary out_data = {0};
+    size_t wlen;
+    if (is_in) {
+        unsigned long n;
+        if (!enif_get_ulong(env, argv[6], &n) || n > CTRL_MAX_LEN)
+            return enif_make_badarg(env);
+        wlen = (size_t)n;
+    } else {
+        if (!enif_inspect_iolist_as_binary(env, argv[6], &out_data) ||
+            out_data.size > CTRL_MAX_LEN)
+            return enif_make_badarg(env);
+        wlen = out_data.size;
+    }
+
+    size_t total = 8 + wlen;
+    Urb *u = enif_alloc(sizeof(Urb));
+    if (!u)
+        return err_tuple(env, ENOMEM);
+    memset(u, 0, sizeof(*u));
+    u->buffer_len = total;
+    u->data_off = 8;
+    u->is_in = is_in;
+    u->tag = tag;
+    u->buffer = enif_alloc(total);
+    if (!u->buffer) {
+        enif_free(u);
+        return err_tuple(env, ENOMEM);
+    }
+    // Setup packet (little-endian wValue/wIndex/wLength).
+    u->buffer[0] = (unsigned char)rtype;
+    u->buffer[1] = (unsigned char)req;
+    u->buffer[2] = (unsigned char)(wvalue & 0xff);
+    u->buffer[3] = (unsigned char)(wvalue >> 8);
+    u->buffer[4] = (unsigned char)(windex & 0xff);
+    u->buffer[5] = (unsigned char)(windex >> 8);
+    u->buffer[6] = (unsigned char)(wlen & 0xff);
+    u->buffer[7] = (unsigned char)(wlen >> 8);
+    if (wlen) {
+        if (is_in)
+            memset(u->buffer + 8, 0, wlen); // never leak heap into the IN binary
+        else
+            memcpy(u->buffer + 8, out_data.data, wlen);
+    }
+    u->kurb.type = USBDEVFS_URB_TYPE_CONTROL;
+    u->kurb.endpoint = 0; // direction lives in the setup packet's bmRequestType
+    u->kurb.flags = 0;
+    u->kurb.buffer = u->buffer;
+    u->kurb.buffer_length = (int)total;
     u->kurb.usercontext = u;
 
     enif_mutex_lock(r->lock);
@@ -1067,8 +1188,9 @@ static ERL_NIF_TERM nif_reap(ErlNifEnv *env, int argc, const ERL_NIF_TERM argv[]
                 // Keep the IN contract (a binary), just empty on OOM.
                 (void)enif_make_new_binary(env, 0, &payload);
             } else {
+                // For control URBs the data sits after the 8-byte setup packet.
                 if (got)
-                    memcpy(b.data, u->buffer, got);
+                    memcpy(b.data, u->buffer + u->data_off, got);
                 payload = enif_make_binary(env, &b);
             }
         } else {
@@ -1185,6 +1307,7 @@ static ErlNifFunc nif_funcs[] = {
     {"reset", 1, nif_reset, ERL_NIF_DIRTY_JOB_IO_BOUND},
     // async engine: all non-blocking, run inline on a normal scheduler.
     {"submit_urb", 6, nif_submit, 0},
+    {"submit_control", 7, nif_submit_control, 0},
     {"submit_iso", 5, nif_submit_iso, 0},
     {"select", 2, nif_select, 0},
     {"select_read", 2, nif_select_read, 0},

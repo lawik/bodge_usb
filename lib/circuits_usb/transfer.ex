@@ -14,14 +14,16 @@ defmodule CircuitsUsb.Transfer do
   engine by cancelling (`discard`) the URB, since async URBs have no kernel-level
   timeout.
 
+  All transfer kinds -- control, bulk, interrupt, isochronous -- are submitted as
+  async URBs and reaped through the same non-blocking loop, so no request ever
+  blocks the engine or a scheduler thread.
+
   ## Caveats
 
-    * A `timeout` of `0` means *no timeout*: no engine timer is armed and the
-      kernel blocks indefinitely. Prefer a finite timeout.
-    * Control transfers (`control_transfer/7` and friends) are synchronous ioctls
-      run inside the GenServer, so a slow or NAKing control request blocks the
-      engine (including reaping of other in-flight transfers) for its duration.
-      A `timeout` of `0` on a control transfer can wedge the engine; don't.
+    * A `timeout` of `0` means *no timeout*: no engine timer is armed, so that
+      caller waits until the device answers (the engine keeps serving other
+      transfers meanwhile). Prefer a finite timeout unless you truly want to wait
+      forever.
   """
 
   use GenServer
@@ -80,7 +82,9 @@ defmodule CircuitsUsb.Transfer do
   @doc """
   Control transfer with an explicit `request_type` (`bmRequestType`), for
   class/vendor and non-device-recipient requests. Direction is bit 7 of
-  `request_type` (IN takes a length, OUT takes iodata). Synchronous.
+  `request_type` (IN takes a length, OUT takes iodata). The call blocks until the
+  transfer completes or `timeout_ms` elapses, but runs as an async URB so it
+  never blocks the engine's other in-flight transfers.
   """
   @spec control_transfer(
           server(),
@@ -219,6 +223,36 @@ defmodule CircuitsUsb.Transfer do
   defp submit(:interrupt, handle, tag, endpoint, data, opts),
     do: Shim.submit_interrupt(handle, tag, endpoint, data, opts)
 
+  # Submit an async URB and track the caller until reap/timeout delivers a reply.
+  # `submit_fun.(tag)` performs the SUBMITURB; a direction/payload mismatch makes
+  # the NIF raise badarg, which we turn into a typed error for this caller rather
+  # than crashing the engine and every other in-flight caller. `timeout > 0` arms
+  # a timer that discards the URB; `0` (or :infinity) waits without blocking the
+  # engine -- it keeps reaping other transfers meanwhile.
+  defp track_async(state, from, submit_fun, timeout) do
+    tag = state.next_tag
+
+    result =
+      try do
+        submit_fun.(tag)
+      rescue
+        ArgumentError -> {:error, :einval}
+      end
+
+    case result do
+      :ok ->
+        timer =
+          if is_integer(timeout) and timeout > 0,
+            do: Process.send_after(self(), {:timeout, tag}, timeout)
+
+        pending = Map.put(state.pending, tag, %{from: from, timer: timer, timed_out: false})
+        {:noreply, arm(%{state | next_tag: tag + 1, pending: pending})}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
+  end
+
   @impl true
   def handle_call({:claim, iface}, _from, state),
     do: {:reply, Shim.claim_interface(state.handle, iface), state}
@@ -244,37 +278,24 @@ defmodule CircuitsUsb.Transfer do
   def handle_call({:set_interface, iface, alt}, _from, state),
     do: {:reply, Shim.set_interface(state.handle, iface, alt), state}
 
-  def handle_call({:control, request_type, request, value, index, dl, timeout}, _from, state),
-    do:
-      {:reply,
-       Shim.control_transfer(state.handle, request_type, request, value, index, dl, timeout),
-       state}
+  def handle_call({:control, request_type, request, value, index, dl, timeout}, from, state) do
+    track_async(
+      state,
+      from,
+      fn tag ->
+        Shim.submit_control(state.handle, tag, request_type, request, value, index, dl)
+      end,
+      timeout
+    )
+  end
 
   def handle_call({:transfer, kind, endpoint, data_or_length, timeout, opts}, from, state) do
-    tag = state.next_tag
-
-    # A direction/payload mismatch (e.g. an IN address with iodata, or vice
-    # versa) makes the NIF raise badarg; catch it so it becomes a typed error
-    # for this caller instead of crashing the engine and every in-flight caller.
-    result =
-      try do
-        submit(kind, state.handle, tag, endpoint, data_or_length, opts)
-      rescue
-        ArgumentError -> {:error, :einval}
-      end
-
-    case result do
-      :ok ->
-        timer =
-          if is_integer(timeout) and timeout > 0,
-            do: Process.send_after(self(), {:timeout, tag}, timeout)
-
-        pending = Map.put(state.pending, tag, %{from: from, timer: timer, timed_out: false})
-        {:noreply, arm(%{state | next_tag: tag + 1, pending: pending})}
-
-      {:error, reason} ->
-        {:reply, {:error, reason}, state}
-    end
+    track_async(
+      state,
+      from,
+      fn tag -> submit(kind, state.handle, tag, endpoint, data_or_length, opts) end,
+      timeout
+    )
   end
 
   @impl true

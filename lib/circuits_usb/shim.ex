@@ -284,6 +284,11 @@ defmodule CircuitsUsb.Shim do
   packet count, its sum the total buffer). For IN, `data` is ignored; for OUT it
   must be exactly the total. `reap/1` returns the completion as
   `{tag, status, {:iso, data_or_bytes, [{actual_length, packet_status}, ...]}}`.
+
+  For IN, `data_or_bytes` is the whole buffer, not compacted: each packet's
+  received bytes sit at its requested-length offset and the gaps left by short
+  or failed packets are zero-filled, so walk the per-packet `actual_length`
+  list to slice out the real data. For OUT it is the total bytes written.
   """
   @spec submit_iso(handle(), non_neg_integer(), 0..255, [0..0xFFFF], iodata() | nil) ::
           :ok | {:error, atom()}

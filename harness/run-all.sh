@@ -4,6 +4,10 @@
 # non-zero if any case failed. Artifacts land in harness/artifacts/.
 set -uo pipefail
 . "$(dirname "$0")/lib/common.sh"
+# common.sh sets `-e`; this orchestrator must keep running past a failing stage
+# to aggregate results, so turn it back off explicitly (don't rely on every
+# stage command being individually guarded).
+set +e
 
 require_root
 

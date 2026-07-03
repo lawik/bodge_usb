@@ -27,15 +27,20 @@ declare -A EXPECT=(
   [none]=present
   [slow]=present
   [stall-string]=present
-  [bad-device-blength]=absent
+  # Linux ignores the device descriptor's bLength (it is always treated as 18
+  # bytes), so an over-large bLength enumerates fine -- the malformation is still
+  # observable on the wire. The *library* is stricter and rejects it (see the
+  # :usbfs_a3_blength test), which is the point of keeping this fault.
+  [bad-device-blength]=present
   [short-device]=absent
   [stall-config]=absent
   [nak-forever]=absent
   [disconnect-mid]=absent
   [config-truncated]=absent
-  [config-oversized]=anomaly
+  [config-oversized]=absent
+  [overflow]=absent
 )
-DEFAULT_ORDER="none slow stall-string bad-device-blength short-device stall-config nak-forever disconnect-mid config-truncated config-oversized"
+DEFAULT_ORDER="none slow stall-string bad-device-blength short-device stall-config nak-forever disconnect-mid config-truncated config-oversized overflow"
 
 # Is our adversarial device currently enumerated on the host?
 device_present() {
@@ -103,19 +108,6 @@ run_one() {
         case_pass "A3 $fault broke enumeration as expected (observable)"
       else
         case_fail "A3 $fault should have broken enumeration but device appeared cleanly"
-      fi
-      ;;
-    anomaly)
-      # config-oversized: host reaction is version-dependent. Observable if the
-      # gadget applied the fault AND the config request reached the wire, or if
-      # enumeration broke / logged an error.
-      local applied=0
-      grep -q "$fault" "$devlog" 2>/dev/null && applied=1
-      if { [ "$applied" -eq 1 ] && grep -Eq '80 06 0200' "$trace" 2>/dev/null; } || \
-         [ "$seen" = absent ] || [ "$enum_error" -eq 0 ]; then
-        case_pass "A3 $fault injected and observable"
-      else
-        case_fail "A3 $fault produced no observable anomaly (trace: $trace)"
       fi
       ;;
   esac

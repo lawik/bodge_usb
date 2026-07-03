@@ -62,7 +62,13 @@ busnum="$("$HARNESS/scripts/load-dummy.sh")"
 hidwriter=""
 cleanup() {
   [ -n "$hidwriter" ] && kill "$hidwriter" 2>/dev/null || true
+  pkill -f "raw_gadget/a3_device" 2>/dev/null || true
+  # Unbind + remove any configfs gadget we stood up (HID etc.) so it releases the
+  # UDC; otherwise rmmod dummy_hcd fails as busy and the next harness run on this
+  # VM finds the UDC held ("couldn't find an available UDC or it's busy").
+  teardown_configfs_gadgets
   rmmod g_zero 2>/dev/null || true
+  rmmod raw_gadget 2>/dev/null || true
   rmmod dummy_hcd 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -114,6 +120,44 @@ run_mix mix test --only usbfs_disconnect
 # dummy_hcd is still loaded; the test loads/unloads g_zero itself.
 echo "== :usbfs_hotplug test =="
 run_mix mix test --only usbfs_hotplug
+
+# A3-through-the-library (B3/B9): point Enumeration/Transfer at the *live*
+# raw-gadget adversarial device and assert the library degrades to typed errors
+# (not just synthetic-blob tests). One fault per sub-phase.
+run_a3_phase() {
+  local fault="$1" tag="$2"
+  teardown_configfs_gadgets
+  rmmod g_zero 2>/dev/null || true
+  modprobe raw_gadget
+  make -C "$HARNESS/raw_gadget" >/dev/null 2>&1
+  RUN_SECONDS=90 FAULT="$fault" "$HARNESS/raw_gadget/a3_device" "$fault" >"$ARTIFACTS/a3-$fault.log" 2>&1 &
+  local a3pid=$! node="" v d
+  for _ in $(seq 1 60); do
+    for v in /sys/bus/usb/devices/*/idVendor; do
+      d="$(dirname "$v")"
+      if [ "$(cat "$v" 2>/dev/null)" = "dead" ] && [ "$(cat "$d/idProduct" 2>/dev/null)" = "beef" ]; then
+        node="/dev/bus/usb/$(printf '%03d' "$(cat "$d/busnum")")/$(printf '%03d' "$(cat "$d/devnum")")"
+        break 2
+      fi
+    done
+    sleep 0.1
+  done
+  if [ -n "$node" ]; then
+    echo "a3 '$fault' node: $node"
+    CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only "$tag"
+  else
+    echo "ERROR: a3 '$fault' device did not enumerate"; kill "$a3pid" 2>/dev/null || true; exit 1
+  fi
+  kill "$a3pid" 2>/dev/null || true
+  rmmod raw_gadget 2>/dev/null || true
+}
+
+echo "== :usbfs_a3_stall (live raw-gadget stall-string) =="
+run_a3_phase stall-string usbfs_a3_stall
+echo "== :usbfs_a3_blength (live raw-gadget bad-device-blength) =="
+run_a3_phase bad-device-blength usbfs_a3_blength
+echo "== :usbfs_a3_slow (live raw-gadget slow) =="
+run_a3_phase slow usbfs_a3_slow
 
 # Phase C -- interrupt transfers (B7) need an interrupt endpoint; g_zero has
 # none, so switch to a configfs HID gadget (interrupt IN + OUT). The gadget

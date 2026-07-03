@@ -3,8 +3,8 @@
 #
 # Bind Gadget Zero on the device side over the dummy_hcd loop and exercise it
 # with the in-kernel usbtest host driver as a known-good baseline. Captures a
-# log artifact. The placeholder hook (A2_DRIVER_HOOK) is where our own userspace
-# driver (Part B) will later drive the same gadget.
+# log artifact. (Part B drives the same gadget via harness/vm/verify.sh, which
+# runs the mix suite against a live g_zero -- so this stays the kernel baseline.)
 #
 # Acceptance (PROJECT.md A2): usbtest runs bulk source/sink, control-message,
 # and halt/clear-halt cases against g_zero and passes; output captured.
@@ -23,7 +23,16 @@ GZ_PID="a4a0"
 #   2  bulk OUT (sink)      10 bulk queued OUT
 #   3  bulk IN  (source)    13 set/clear halt (endpoint stall recovery)
 #   5  control read
-TESTS="${TESTS:-1 2 3 5 9 10 13}"
+# Curated known-good cases for gadget-zero source/sink over dummy_hcd:
+#   1  control write        10 queued bulk        13 set/clear halt (stall recovery)
+#   2  bulk OUT (sink)       11 unlink reads       14 control writes
+#   3  bulk IN  (source)     12 unlink writes
+#   5  control read           9 control queue
+# 11/12 (unlink) are the kernel baseline for our async discard/cancel path.
+# gadget zero (source/sink) supports the bulk + control cases below. Cases 14+
+# are isochronous, which dummy_hcd cannot emulate (usbtest returns EINVAL); B8
+# exercises isoc against the QEMU usb-audio device instead.
+TESTS="${TESTS:-1 2 3 5 9 10 11 12 13}"
 ITER="${ITER:-1000}"
 SIZE="${SIZE:-1024}"
 
@@ -115,26 +124,23 @@ main() {
     log "usbtest case $t (iter=$ITER size=$SIZE)"
     out="$("$bin" -D "$node" -t "$t" -c "$ITER" -s "$SIZE" 2>&1)" || true
     printf '=== test %s ===\n%s\n' "$t" "$out" >>"$LOG"
-    if printf '%s' "$out" | grep -q -- "-->"; then
+    if ! printf '%s' "$out" | grep -qi 'speed'; then
+      # No speed line => testusb did not open/run the device at all.
+      case_fail "A2 usbtest case $t: testusb did not run -- $out"
+    elif printf '%s' "$out" | grep -q -- "-->"; then
       case_fail "A2 usbtest case $t: $(printf '%s' "$out" | grep -- '-->' | head -1)"
     elif printf '%s' "$out" | grep -q "test $t,"; then
       case_pass "A2 usbtest case $t"
+    elif printf '%s' "$out" | grep -q "test $t"; then
+      # A 'test N' line we cannot classify => testusb output format changed;
+      # fail loudly rather than silently drop coverage.
+      case_fail "A2 usbtest case $t: unrecognized result (testusb format change?) -- $out"
     else
-      warn "usbtest case $t: no clear result, treating as skip. Output: $out"
+      # testusb ran but emitted no 'test N' line: the case is not implemented
+      # for this gadget (EOPNOTSUPP). A genuine skip.
+      log "usbtest case $t not supported by gadget zero (skipped)"
     fi
   done
-
-  # 6. Placeholder hook for our own userspace driver (Part B4/B5 target).
-  if [ -n "${A2_DRIVER_HOOK:-}" ] && [ -x "${A2_DRIVER_HOOK}" ]; then
-    log "running Part B driver hook: $A2_DRIVER_HOOK"
-    if "$A2_DRIVER_HOOK" "$node" >>"$LOG" 2>&1; then
-      case_pass "A2 Part-B driver hook"
-    else
-      case_fail "A2 Part-B driver hook"
-    fi
-  else
-    log "no Part B driver hook set (A2_DRIVER_HOOK); reference path only"
-  fi
 
   log "log artifact: $LOG"
   case_summary

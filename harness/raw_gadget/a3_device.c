@@ -16,10 +16,12 @@
 //
 // Fault catalog (maps to PROJECT.md A3):
 //   none               fully functional reference device
-//   bad-device-blength device descriptor with a wrong bLength
+//   bad-device-blength device descriptor with an over-large bLength (Linux
+//                      ignores it and enumerates; the library rejects it)
 //   short-device       device descriptor returned as a short packet (8 bytes)
 //   config-truncated   config descriptor sent shorter than its wTotalLength
 //   config-oversized   config wTotalLength claims far more than exists
+//   overflow           returns more bytes than wLength (wrong wLength / babble)
 //   stall-config       STALL the GET_DESCRIPTOR(config) request
 //   stall-string       STALL string descriptor requests
 //   nak-forever        never answer GET_DESCRIPTOR(device); host times out
@@ -81,50 +83,23 @@ static struct usb_device_descriptor dev_desc = {
 	.bNumConfigurations = 1,
 };
 
-struct full_config {
-	struct usb_config_descriptor config;
-	struct usb_interface_descriptor intf;
-	struct usb_endpoint_descriptor ep_in;
-	struct usb_endpoint_descriptor ep_out;
-} __attribute__((packed));
-
-static struct full_config cfg = {
-	.config = {
-		.bLength = USB_DT_CONFIG_SIZE,
-		.bDescriptorType = USB_DT_CONFIG,
-		.wTotalLength = sizeof(struct full_config),
-		.bNumInterfaces = 1,
-		.bConfigurationValue = 1,
-		.iConfiguration = 0,
-		.bmAttributes = USB_CONFIG_ATT_ONE,
-		.bMaxPower = 60, // 120 mA
-	},
-	.intf = {
-		.bLength = USB_DT_INTERFACE_SIZE,
-		.bDescriptorType = USB_DT_INTERFACE,
-		.bInterfaceNumber = 0,
-		.bNumEndpoints = 2,
-		.bInterfaceClass = 0xff, // vendor specific
-		.bInterfaceSubClass = 0,
-		.bInterfaceProtocol = 0,
-		.iInterface = 0,
-	},
-	.ep_in = {
-		.bLength = USB_DT_ENDPOINT_SIZE,
-		.bDescriptorType = USB_DT_ENDPOINT,
-		.bEndpointAddress = 0x81,
-		.bmAttributes = USB_ENDPOINT_XFER_BULK,
-		.wMaxPacketSize = 512,
-		.bInterval = 0,
-	},
-	.ep_out = {
-		.bLength = USB_DT_ENDPOINT_SIZE,
-		.bDescriptorType = USB_DT_ENDPOINT,
-		.bEndpointAddress = 0x01,
-		.bmAttributes = USB_ENDPOINT_XFER_BULK,
-		.wMaxPacketSize = 512,
-		.bInterval = 0,
-	},
+// Configuration descriptor set, laid out byte-exact (32 bytes). We deliberately
+// do NOT build this from struct usb_endpoint_descriptor: that struct is 9 bytes
+// in the kernel headers (it carries the audio-only bRefresh/bSynchAddress
+// fields), so sizeof() would append two stray zero bytes after each 7-byte
+// endpoint. The kernel tolerates the padding, but a strict host parser reads
+// those zeros as a bLength==0 (zero-length) descriptor -- so a `none` device
+// would spuriously fail a real client. Keep the wire exactly wTotalLength bytes.
+#define CFG_TOTAL 32
+static const unsigned char cfg_bytes[CFG_TOTAL] = {
+	// configuration (9): 1 interface, 120 mA, self/bus per USB_CONFIG_ATT_ONE
+	9, USB_DT_CONFIG, CFG_TOTAL, 0x00, 1, 1, 0, USB_CONFIG_ATT_ONE, 60,
+	// interface 0 (9): vendor-specific class, 2 bulk endpoints
+	9, USB_DT_INTERFACE, 0, 0, 2, 0xff, 0, 0, 0,
+	// endpoint IN 0x81 (7): bulk, 512-byte max packet (0x0200 LE)
+	7, USB_DT_ENDPOINT, 0x81, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
+	// endpoint OUT 0x01 (7): bulk, 512-byte max packet (0x0200 LE)
+	7, USB_DT_ENDPOINT, 0x01, USB_ENDPOINT_XFER_BULK, 0x00, 0x02, 0,
 };
 
 // A minimal string descriptor set: index 0 (lang), 1/2/3 text.
@@ -171,6 +146,19 @@ static int ep0_write(int fd, const void *data, __u32 len) {
 	if (len) memcpy(io->data, data, len);
 	int rv = ioctl(fd, USB_RAW_IOCTL_EP0_WRITE, io);
 	if (rv < 0) a3log("EP0_WRITE(%u) failed: %s", len, strerror(errno));
+	return rv;
+}
+
+// Complete a no-data OUT control request (SET_CONFIGURATION, SET_INTERFACE).
+// raw-gadget classifies the whole request by bmRequestType direction: an OUT
+// request leaves ep0_out_pending set, so the ack is an EP0_READ of length 0 (the
+// UDC core drives the IN status ZLP). Using EP0_WRITE here returns EBUSY and
+// wedges ep0, breaking every later control transfer on the device.
+static int ep0_ack_out(int fd) {
+	struct usb_raw_ep_io io;
+	io.ep = 0; io.flags = 0; io.length = 0;
+	int rv = ioctl(fd, USB_RAW_IOCTL_EP0_READ, &io);
+	if (rv < 0) a3log("EP0_READ(0) ack failed: %s", strerror(errno));
 	return rv;
 }
 
@@ -230,21 +218,30 @@ static void handle_get_descriptor(int fd, struct usb_ctrlrequest *ctrl) {
 			ep0_stall(fd);
 			break;
 		}
-		struct full_config c = cfg;
-		int len = sizeof(c);
+		unsigned char c[CFG_TOTAL];
+		memcpy(c, cfg_bytes, CFG_TOTAL);
+		int len = CFG_TOTAL;
+		int cap_to_wlen = 1;
 		if (fault_is("config-oversized")) {
-			c.config.wTotalLength = 0xffff; // claims far more than exists
+			c[2] = 0xff; c[3] = 0xff; // wTotalLength claims far more than exists
 			a3log("config-oversized: wTotalLength=0xffff");
 		}
 		if (fault_is("config-truncated")) {
 			// wTotalLength stays honest but we send fewer bytes than
 			// the host asked for -> truncated descriptor set.
-			if (wlen > (int)sizeof(c)) wlen = sizeof(c);
-			len = (int)sizeof(struct usb_config_descriptor) + 2;
-			a3log("config-truncated: sending %d of %zu bytes", len, sizeof(c));
+			if (wlen > CFG_TOTAL) wlen = CFG_TOTAL;
+			len = USB_DT_CONFIG_SIZE + 2;
+			a3log("config-truncated: sending %d of %d bytes", len, CFG_TOTAL);
 		}
-		if (len > wlen) len = wlen;
-		ep0_write(fd, &c, len);
+		if (fault_is("overflow")) {
+			// Wrong wLength: send the whole config even when the host asked
+			// for only the 9-byte header -> more data than requested (babble
+			// / EOVERFLOW on the host).
+			cap_to_wlen = 0;
+			a3log("overflow: sending %d bytes for a %d-byte request", len, wlen);
+		}
+		if (cap_to_wlen && len > wlen) len = wlen;
+		ep0_write(fd, c, len);
 		break;
 	}
 	case USB_DT_STRING: {
@@ -283,10 +280,10 @@ static void handle_control(int fd, struct usb_ctrlrequest *ctrl) {
 		ioctl(fd, USB_RAW_IOCTL_VBUS_DRAW, 60);
 		ioctl(fd, USB_RAW_IOCTL_CONFIGURE, 0);
 		a3log("set configuration %u", ctrl->wValue);
-		ep0_write(fd, NULL, 0);
+		ep0_ack_out(fd);
 		break;
 	case USB_REQ_SET_INTERFACE:
-		ep0_write(fd, NULL, 0);
+		ep0_ack_out(fd);
 		break;
 	case USB_REQ_GET_STATUS: {
 		unsigned char status[2] = {0, 0};

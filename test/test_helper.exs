@@ -14,6 +14,9 @@ ExUnit.start(
     :usbfs_iso,
     :usbfs_reset,
     :usbfs_disconnect,
-    :usbfs_hotplug
+    :usbfs_hotplug,
+    :usbfs_a3_stall,
+    :usbfs_a3_blength,
+    :usbfs_a3_slow
   ]
 )

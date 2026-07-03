@@ -102,20 +102,23 @@ faults (see `raw_gadget/a3_device.c`):
 | `none`               | fully functional reference device              | enumerates                |
 | `slow`               | delays every descriptor response               | enumerates (slowly)       |
 | `stall-string`       | STALLs string descriptor reads                 | enumerates, no strings    |
-| `bad-device-blength` | device descriptor with wrong `bLength`         | enumeration error         |
+| `bad-device-blength` | device descriptor with an over-large `bLength`  | enumerates (Linux ignores device `bLength`); library rejects it |
 | `short-device`       | device descriptor returned as a short packet   | enumeration error         |
 | `stall-config`       | STALLs the config descriptor read              | enumeration error         |
 | `config-truncated`   | config sent shorter than its `wTotalLength`    | enumeration error         |
-| `config-oversized`   | config `wTotalLength` claims far more than sent| anomaly on the wire       |
+| `config-oversized`   | config `wTotalLength` claims far more than sent| enumeration error         |
+| `overflow`           | returns more bytes than `wLength` (wrong wLen) | enumeration error (babble)|
 | `nak-forever`        | never answers the device descriptor read       | enumeration timeout       |
 | `disconnect-mid`     | disconnects mid-enumeration                     | disconnect during setup   |
 
-## The Part B hook
+## Driving Part B against the harness
 
-`a2-gzero-usbtest.sh` honors `A2_DRIVER_HOOK`: an executable that receives the
-gadget-zero device node and drives it with our own userspace code. That is the
-seam where Part B's transfer engine gets exercised against the same gadget the
-in-kernel `usbtest` validates today.
+`harness/vm/verify.sh` builds the library with the guest toolchain and runs the
+mix suite against the live gadgets these scripts stand up (g_zero for bulk/
+control/async, a HID gadget for interrupt, QEMU usb-audio for isochronous, and
+a raw-gadget adversarial device for the malformed-descriptor paths). That is
+where Part B is exercised against the same devices `usbtest`/`a3_device`
+validate at the kernel level.
 
 ## CI
 

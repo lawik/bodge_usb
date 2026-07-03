@@ -66,8 +66,8 @@ harness/vm/vm.sh down        # power off
 
 VM state (image, disk overlay, ssh key) lives in
 `~/.local/share/circuits-usb-vm/`, outside the repo. Needs `qemu-system-x86_64`,
-`genisoimage`, and access to `/dev/kvm`. This is verified green on Ubuntu 24.04 /
-kernel 6.8 (22/22 cases).
+`genisoimage`, and access to `/dev/kvm`. Developed against Ubuntu 24.04 /
+kernel 6.8.
 
 ## Usage (directly, on a host you have root on)
 

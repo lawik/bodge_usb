@@ -1,6 +1,6 @@
 defmodule CircuitsUsb.Transfer do
   @moduledoc """
-  Asynchronous transfer engine (Part B5).
+  Asynchronous transfer engine.
 
   A GenServer that owns one device handle and drives transfers through the
   shim's async primitives (`submit_*` -> `select` -> `reap` -> `discard`).

@@ -1,6 +1,6 @@
 defmodule CircuitsUsb.Gadget do
   @moduledoc """
-  USB gadget (device-side) definition over configfs (Part C1).
+  USB gadget (device-side) definition over configfs.
 
   The mirror image of the rest of this library: instead of talking *to* a USB
   device, this machine *is* one. A gadget is described by a spec (IDs, strings,
@@ -42,9 +42,9 @@ defmodule CircuitsUsb.Gadget do
   for the functions used, and permissions on `/sys/kernel/config` (root).
 
   Function attribute values: integers are written in decimal, binaries raw
-  (e.g. `report_desc`), booleans as `1`/`0`. `max_power` is in mA. This module
-  does not cover `os_desc` (Windows compat descriptors) or FunctionFS; see
-  NEXT.md Part C for the roadmap.
+  (e.g. `report_desc`), booleans as `1`/`0`. `max_power` is in mA. `os_desc`
+  (Windows compatibility descriptors) is not covered; for fully custom device
+  functions see `CircuitsUsb.FunctionFS`.
   """
 
   alias __MODULE__

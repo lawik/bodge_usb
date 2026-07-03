@@ -1,6 +1,6 @@
 defmodule CircuitsUsb.Enumeration do
   @moduledoc """
-  Device enumeration (Part B3).
+  Device enumeration.
 
   Walks `/dev/bus/usb`, reads each node's descriptor blob through the shim, and
   parses it. A single malformed device never breaks enumeration of the others:

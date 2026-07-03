@@ -92,7 +92,7 @@ done
 [ -n "$node" ] || { echo "ERROR: no gadget-zero node appeared"; exit 1; }
 echo "usbfs node: $node"
 
-# Phase A -- driver detach/reattach (B6) needs a stock driver bound. udev
+# Phase A -- driver detach/reattach needs a stock driver bound. udev
 # auto-loads usbtest (its modalias matches gadget zero) and binds it; make sure.
 command -v udevadm >/dev/null 2>&1 && udevadm settle 2>/dev/null || true
 modprobe usbtest 2>/dev/null || true
@@ -110,7 +110,7 @@ modprobe -r usbtest 2>/dev/null || rmmod usbtest 2>/dev/null || true
 echo "== :usbfs integration test =="
 CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only usbfs
 
-# Recovery (B9) tests that disrupt the gadget, run isolated and in order: reset
+# Recovery tests that disrupt the gadget, run isolated and in order: reset
 # re-enumerates g_zero (it stays up); disconnect then rmmods it. Both discover
 # the gadget by VID/PID themselves, tolerant of the node changing after reset.
 echo "== :usbfs_reset test =="
@@ -161,7 +161,7 @@ run_a3_phase bad-device-blength usbfs_a3_blength
 echo "== :usbfs_a3_slow (live raw-gadget slow) =="
 run_a3_phase slow usbfs_a3_slow
 
-# Part C1 -- the library plays BOTH roles: CircuitsUsb.Gadget defines a HID
+# The library plays BOTH roles: CircuitsUsb.Gadget defines a HID
 # gadget via configfs and binds it to dummy_udc.0, while the host tier of the
 # same library enumerates it and exchanges interrupt reports with it.
 echo "== :usbfs_gadget tests (library-defined configfs gadget) =="
@@ -171,7 +171,7 @@ modprobe libcomposite usb_f_hid
 run_mix mix test --only usbfs_gadget
 teardown_configfs_gadgets
 
-# Part C2 -- FunctionFS: the library serves a *custom* function from userspace
+# FunctionFS: the library serves a *custom* function from userspace
 # (toy vendor protocol over ep0 + bulk echo over epN) and drives it with its
 # own host tier.
 echo "== :usbfs_ffs tests (FunctionFS custom function) =="
@@ -181,7 +181,7 @@ run_mix mix test --only usbfs_ffs
 umount /dev/ffs-circuits 2>/dev/null || true
 teardown_configfs_gadgets
 
-# Phase C -- interrupt transfers (B7) need an interrupt endpoint; g_zero has
+# Phase C -- interrupt transfers need an interrupt endpoint; g_zero has
 # none, so switch to a configfs HID gadget (interrupt IN + OUT). The gadget
 # streams a known 8-byte report which the host reads over the interrupt IN ep.
 setup_hid_gadget() {
@@ -268,7 +268,7 @@ else
   exit 1
 fi
 
-# Phase D -- isochronous transfers (B8). dummy_hcd cannot emulate isoc, so this
+# Phase D -- isochronous transfers. dummy_hcd cannot emulate isoc, so this
 # targets the QEMU usb-audio device on the emulated xHCI. It is always present
 # (VM-level), so the test discovers it itself -- no gadget setup needed.
 echo "== :usbfs_iso tests (QEMU usb-audio, isochronous) =="

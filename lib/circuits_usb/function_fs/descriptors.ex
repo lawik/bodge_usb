@@ -1,6 +1,6 @@
 defmodule CircuitsUsb.FunctionFs.Descriptors do
   @moduledoc """
-  Builds the binary blobs FunctionFS expects on `ep0` (Part C2).
+  Builds the binary blobs FunctionFS expects on `ep0`.
 
   A FunctionFS function describes itself by writing two blobs to its `ep0`
   before the gadget can bind: a `FUNCTIONFS_DESCRIPTORS_MAGIC_V2` blob holding

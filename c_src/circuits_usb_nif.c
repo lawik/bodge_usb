@@ -1,17 +1,18 @@
 // SPDX-License-Identifier: Apache-2.0
 //
-// circuits_usb syscall shim NIF (Part B1).
+// circuits_usb syscall shim NIF.
 //
-// A deliberately narrow shim over a single file descriptor: open, close, read,
-// write. The fd lives in an ErlNifResource whose destructor closes it, so a
-// dropped/GC'd handle never leaks an fd. errno is captured immediately after
-// each syscall and mapped to an atom. No transfers/ioctls yet -- those arrive in
-// B2 and will carry usbfs request codes as 64-bit unsigned values (helpers for
-// that live here already).
+// A narrow NIF over a single usbfs (or netlink) file descriptor: open/close/
+// read/write, the fixed usbfs ioctls, and an async URB engine (submit / select
+// / reap / discard). The fd lives in an ErlNifResource whose destructor closes
+// it, so a dropped or GC'd handle never leaks an fd. errno is captured
+// immediately after each syscall and mapped to an atom.
 //
-// Linux only. usbfs descriptor reads are fast and non-blocking, so B1 runs
-// inline on a normal scheduler; blocking transfer paths (B4+) move to dirty
-// schedulers / enif_select and must not hold fd_lock across a blocking call.
+// Linux only. Fast, non-blocking calls (descriptor reads, URB submit/reap) run
+// inline on a normal scheduler; blocking ioctls run on dirty I/O schedulers and
+// must not hold the fd lock across the syscall -- they take a refcount and
+// release the lock (begin_blocking/end_blocking). enif_select delivers URB
+// readiness to the owning process.
 
 #define _GNU_SOURCE // O_CLOEXEC and friends under -std=c11
 
@@ -498,7 +499,7 @@ static ERL_NIF_TERM nif_write_blocking(ErlNifEnv *env, int argc, const ERL_NIF_T
 //       returns {:ok, binary} with the bytes the device returned.
 //   OUT: data_or_length is the payload (iodata); returns {:ok, bytes_written}.
 //
-// This is the B2 marshalling + pointer fixup: we build struct
+// Marshalling + pointer fixup: we build struct
 // usbdevfs_ctrltransfer ourselves (so the layout and _IOC_SIZE are ours, never
 // caller-supplied), allocate one stable buffer of exactly wLength, embed its
 // address in ctrl.data, run the ioctl, then read the buffer back. Over/undersized
@@ -749,7 +750,7 @@ static ERL_NIF_TERM nif_release_interface(ErlNifEnv *env, int argc, const ERL_NI
     return uint_ioctl(env, argv, USBDEVFS_RELEASEINTERFACE, 0);
 }
 
-// ---- kernel driver detach/reattach (B6) --------------------------------
+// ---- kernel driver detach/reattach ------------------------------------
 
 // get_driver(handle, interface) -> {:ok, name} | {:error, atom}
 // Name of the kernel driver bound to the interface, or :enodata if none.
@@ -859,7 +860,7 @@ static ERL_NIF_TERM nif_attach_driver(ErlNifEnv *env, int argc, const ERL_NIF_TE
     return driver_ioctl(env, argv, USBDEVFS_CONNECT);
 }
 
-// ---- async engine: submit / select / reap / discard (B5) ---------------
+// ---- async engine: submit / select / reap / discard -------------------
 
 // A completed URB's status: 0 -> :ok, negative -> errno atom of its magnitude.
 static ERL_NIF_TERM urb_status_term(ErlNifEnv *env, int status) {
@@ -1400,7 +1401,7 @@ static int load(ErlNifEnv *env, void **priv_data, ERL_NIF_TERM load_info) {
     ErlNifResourceFlags tried;
     ErlNifResourceTypeInit init = {0};
     init.dtor = usb_fd_dtor;
-    init.stop = usb_fd_stop; // needed for enif_select teardown (B5)
+    init.stop = usb_fd_stop; // needed for enif_select teardown
     usb_fd_type = enif_open_resource_type_x(env, "circuits_usb_fd", &init,
                                             ERL_NIF_RT_CREATE | ERL_NIF_RT_TAKEOVER,
                                             &tried);
@@ -1430,8 +1431,8 @@ static ErlNifFunc nif_funcs[] = {
     {"read_blocking", 2, nif_read_blocking, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"write_blocking", 2, nif_write_blocking, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"fileno", 1, nif_fileno, 0},
-    // Blocking usbfs ioctls run on a dirty I/O scheduler (correctness-first,
-    // per B4; the async select/reap engine in B5 supersedes the blocking path).
+    // Blocking usbfs ioctls run on a dirty I/O scheduler; the caller blocks
+    // on their result while the async engine below serves everyone else.
     {"control_transfer", 7, nif_control_transfer, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"bulk_transfer", 4, nif_bulk_transfer, ERL_NIF_DIRTY_JOB_IO_BOUND},
     {"set_interface", 3, nif_set_interface, ERL_NIF_DIRTY_JOB_IO_BOUND},

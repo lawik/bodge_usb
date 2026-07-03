@@ -1,6 +1,6 @@
 defmodule CircuitsUsb.Descriptor do
   @moduledoc """
-  USB descriptor parsing (Part B3).
+  USB descriptor parsing.
 
   Parses the raw descriptor bytes that usbfs returns (device descriptor followed
   by the configuration descriptor sets) into Elixir structs, plus string
@@ -8,9 +8,9 @@ defmodule CircuitsUsb.Descriptor do
 
   Parsing is total and defensive: for *any* input binary, `parse/1` returns
   either `{:ok, %Device{}}` or `{:error, reason}` with a typed reason, and never
-  raises. This is what lets the library survive the adversarial descriptors from
-  the Part A A3 fault harness (truncated, oversized, zero-length, wrong
-  `bLength`, ...).
+  raises. That is what lets the library survive malformed descriptors from a
+  hostile or buggy device (truncated, oversized, zero-length, wrong `bLength`,
+  ...).
   """
 
   # Standard descriptor type codes (USB 2.0 table 9-5).

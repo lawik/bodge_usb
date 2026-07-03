@@ -1,6 +1,6 @@
 defmodule CircuitsUsb.Hotplug do
   @moduledoc """
-  USB hotplug notifications (Part B10).
+  USB hotplug notifications.
 
   Watches the kernel `NETLINK_KOBJECT_UEVENT` broadcast socket and delivers
   device add/remove events to subscribers as `{:usb_hotplug, event}` messages,

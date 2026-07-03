@@ -1,6 +1,6 @@
 defmodule CircuitsUsb.Shim do
   @moduledoc """
-  Low-level usbfs syscall shim (Part B1): the primitive tier of this library.
+  Low-level usbfs syscall shim: the primitive tier of this library.
 
   A deliberately narrow NIF over a single file descriptor: `open/2`, `close/1`,
   `read/2`, `write/2`, the fixed usbfs ioctls, and the async URB primitives
@@ -226,7 +226,7 @@ defmodule CircuitsUsb.Shim do
   @spec set_interface(handle(), non_neg_integer(), non_neg_integer()) :: :ok | {:error, atom()}
   def set_interface(_h, _interface, _altsetting), do: :erlang.nif_error(:nif_not_loaded)
 
-  # ---- async engine primitives (B5) --------------------------------------
+  # ---- async engine primitives --------------------------------------
 
   # USBDEVFS_URB_TYPE_* codes and flags.
   @urb_type_interrupt 1

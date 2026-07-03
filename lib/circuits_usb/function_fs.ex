@@ -1,6 +1,6 @@
 defmodule CircuitsUsb.FunctionFs do
   @moduledoc """
-  Custom USB device functions over FunctionFS (Part C2).
+  Custom USB device functions over FunctionFS.
 
   Where `CircuitsUsb.Gadget` covers the device classes the kernel implements,
   FunctionFS is for functions the kernel does *not* know: your own protocol,

@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared helpers for the USB test harness (Part A).
+# Shared helpers for the USB test harness.
 # Source this from every harness script:  . "$(dirname "$0")/../lib/common.sh"
 #
 # Provides: logging, root check, a cleanup-trap stack, wait/poll helpers,

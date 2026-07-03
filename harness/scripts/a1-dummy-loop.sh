@@ -5,7 +5,7 @@
 # bound to the software UDC, and confirm it enumerates on the host stack under
 # /dev/bus/usb. Then tear everything down and confirm nothing is left dangling.
 #
-# Acceptance (PROJECT.md A1): a stock gadget enumerates and is visible under
+# Acceptance: a stock gadget enumerates and is visible under
 # /dev/bus/usb; setup and teardown leave no dangling modules or nodes.
 set -euo pipefail
 . "$(dirname "$0")/../lib/common.sh"

@@ -5,7 +5,7 @@ usbfs. It drives arbitrary USB devices from the BEAM without shelling out to
 libusb and without a generic "call any ioctl" gateway: the NIF exposes only a
 small, fixed, size-validated set of usbfs ioctls whose struct layouts it owns.
 
-Linux only. See `PROJECT.md` for the design and `harness/` for the fully virtual
+Linux only. See `harness/` for the fully virtual
 test rig (dummy_hcd, g_zero/usbtest, raw-gadget fault injection, usbmon).
 
 ## Features

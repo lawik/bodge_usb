@@ -7,7 +7,7 @@ defmodule CircuitsUsb.AdversarialTest do
   alias CircuitsUsb.Transfer
 
   # Live A3 raw-gadget adversarial device (dead:beef), one fault active per phase
-  # (harness/vm/verify.sh). This validates PROJECT.md's B3/B9 acceptance -- the
+  # (harness/vm/verify.sh). This checks the
   # library degrades safely against a *real* hostile device on the wire, not just
   # against synthetic descriptor blobs in descriptor_test.exs.
   defp a3_node do

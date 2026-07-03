@@ -1,10 +1,10 @@
-# USB test harness (Part A)
+# USB test harness
 
-The adversarial target that Part B (the actual USB library) is validated
+The adversarial target that the USB library is validated
 against. It stands up a fully virtual USB stack on one machine using the
 kernel's software UDC (`dummy_hcd`), drives it with known-good in-kernel
 drivers, injects faults with a raw-gadget device, and captures the wire with
-usbmon. See `../PROJECT.md` for the full plan.
+usbmon.
 
 Everything here runs against emulated USB only. No physical devices are
 touched.
@@ -51,7 +51,7 @@ fetch.sh` pulls a `dummy_hcd.c` matching the running kernel's `major.minor`
 
 The privileged stages (module load, raw-gadget, device resets) are best run in a
 throwaway KVM VM: root without touching the host, and crash-isolated for when
-Part B's NIF starts oopsing kernels. `vm/vm.sh` manages an Ubuntu cloud-image VM
+the library's NIF starts oopsing kernels. `vm/vm.sh` manages an Ubuntu cloud-image VM
 with this repo shared in over virtio-9p. It builds and runs guest-local and
 writes artifacts back to `harness/artifacts/` on the host.
 
@@ -111,13 +111,13 @@ faults (see `raw_gadget/a3_device.c`):
 | `nak-forever`        | never answers the device descriptor read       | enumeration timeout       |
 | `disconnect-mid`     | disconnects mid-enumeration                     | disconnect during setup   |
 
-## Driving Part B against the harness
+## Driving the library against the harness
 
 `harness/vm/verify.sh` builds the library with the guest toolchain and runs the
 mix suite against the live gadgets these scripts stand up (g_zero for bulk/
 control/async, a HID gadget for interrupt, QEMU usb-audio for isochronous, and
 a raw-gadget adversarial device for the malformed-descriptor paths). That is
-where Part B is exercised against the same devices `usbtest`/`a3_device`
+where the library is exercised against the same devices `usbtest`/`a3_device`
 validate at the kernel level.
 
 ## CI

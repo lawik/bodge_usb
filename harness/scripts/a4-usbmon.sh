@@ -11,7 +11,7 @@
 #   stop  <outfile>         stop the capture started for <outfile>
 #   selftest                A4 acceptance: prove a trace shows setup/data/status
 #
-# Acceptance (PROJECT.md A4): a transfer over the loop produces a usbmon trace
+# Acceptance: a transfer over the loop produces a usbmon trace
 # that shows the expected setup/data/status phases.
 set -euo pipefail
 . "$(dirname "$0")/../lib/common.sh"

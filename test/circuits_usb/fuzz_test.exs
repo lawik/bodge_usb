@@ -8,7 +8,7 @@ defmodule CircuitsUsb.FuzzTest do
   Seeded, deterministic fuzz of the parsing surfaces (host-safe, no device).
 
   These parsers are the part of the library that consumes bytes a hostile
-  device controls, so "total, never raises" is a hard contract (PROJECT.md B3).
+  device controls, so "total, never raises" is a hard contract.
   descriptor_test.exs covers the curated malformation catalog; this module adds
   volume: random bytes, plus structured mutations of a valid blob (bit flips,
   truncations, length-field tampering, splices), which find edge cases curation

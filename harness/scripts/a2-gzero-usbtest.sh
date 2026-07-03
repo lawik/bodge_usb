@@ -3,10 +3,10 @@
 #
 # Bind Gadget Zero on the device side over the dummy_hcd loop and exercise it
 # with the in-kernel usbtest host driver as a known-good baseline. Captures a
-# log artifact. (Part B drives the same gadget via harness/vm/verify.sh, which
+# log artifact. (The library drives the same gadget via harness/vm/verify.sh, which
 # runs the mix suite against a live g_zero -- so this stays the kernel baseline.)
 #
-# Acceptance (PROJECT.md A2): usbtest runs bulk source/sink, control-message,
+# Acceptance: usbtest runs bulk source/sink, control-message,
 # and halt/clear-halt cases against g_zero and passes; output captured.
 set -euo pipefail
 . "$(dirname "$0")/../lib/common.sh"

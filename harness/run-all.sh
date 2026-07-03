@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the full Part A harness end to end: A1 -> A2 -> A3 -> A4.
+# Run the full harness end to end: A1 -> A2 -> A3 -> A4.
 # One command, headless, privileged. Aggregates per-case results and exits
 # non-zero if any case failed. Artifacts land in harness/artifacts/.
 set -uo pipefail

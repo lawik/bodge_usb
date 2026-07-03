@@ -7,7 +7,7 @@
 # the expected host-side observation. Per-fault artifacts (usbmon trace, dmesg
 # delta, gadget log) are retained.
 #
-# Acceptance (PROJECT.md A3): each fault case can be triggered on demand and is
+# Acceptance: each fault case can be triggered on demand and is
 # observable on the host side.
 #
 # Usage:  a3-raw-gadget.sh [fault ...]     (default: full matrix)

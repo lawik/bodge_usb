@@ -281,7 +281,7 @@ defmodule CircuitsUsb.ShimTest do
     end
   end
 
-  # Integration against a real usbfs node (Part A A1). Set CIRCUITS_USB_TEST_NODE
+  # Integration against a real usbfs node. Set CIRCUITS_USB_TEST_NODE
   # to e.g. /dev/bus/usb/001/002. usbfs read() returns the cached descriptors;
   # the first 18 bytes are the device descriptor (bLength=18, bDescriptorType=1).
   describe "usbfs descriptor read" do

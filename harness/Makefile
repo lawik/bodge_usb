@@ -1,4 +1,4 @@
-# USB test harness (Part A) orchestration.
+# USB test harness orchestration.
 #
 # Most targets need root (module load, usbfs/configfs/raw-gadget, usbmon).
 # Build targets (dummy_hcd, testusb, a3_device) do not.
@@ -11,7 +11,7 @@ KVER    ?= $(shell uname -r)
         a1 a2 a3-run a4 all clean distclean check-root
 
 help:
-	@echo "USB harness (Part A) targets:"
+	@echo "USB harness targets:"
 	@echo "  make build      build dummy_hcd.ko, testusb, a3_device (no root)"
 	@echo "  make a1         A1 dummy_hcd virtual loop            (root)"
 	@echo "  make a2         A2 g_zero + usbtest reference stress (root)"

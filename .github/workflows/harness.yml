@@ -1,6 +1,6 @@
 name: usb-harness
 
-# Part A test harness (PROJECT.md A5): build the out-of-tree dummy_hcd, then run
+# USB test harness: build the out-of-tree dummy_hcd, then run
 # A1..A4 headless and privileged, retaining logs and usbmon traces as artifacts.
 #
 # Manual dispatch only. Building dummy_hcd out-of-tree needs a kernel that

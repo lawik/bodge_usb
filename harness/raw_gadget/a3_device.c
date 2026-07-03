@@ -6,7 +6,7 @@
 // (dummy_hcd must be loaded). A fault mode selected on the command line makes
 // enumeration go wrong in one specific, observable way. Every fault is visible
 // on the host side purely through standard enumeration (reading descriptors via
-// usbfs / lsusb / sysfs), so A3 needs nothing from Part B.
+// usbfs / lsusb / sysfs), so it needs nothing from the library.
 //
 // Usage: a3_device <fault> [udc_driver] [udc_device]
 //   fault defaults to $FAULT or "none".
@@ -14,7 +14,7 @@
 //   $RUN_SECONDS (default 8) bounds the lifetime so the harness never hangs.
 //   $SLOW_MS (default 400) is the delay used by the "slow" fault.
 //
-// Fault catalog (maps to PROJECT.md A3):
+// Fault catalog:
 //   none               fully functional reference device
 //   bad-device-blength device descriptor with an over-large bLength (Linux
 //                      ignores it and enumerates; the library rejects it)

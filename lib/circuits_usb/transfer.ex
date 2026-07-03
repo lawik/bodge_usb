@@ -41,6 +41,13 @@ defmodule CircuitsUsb.Transfer do
       `cancel/2`).
     * If the process that should receive a completion dies first, the engine
       discards the transfer and drops the completion.
+    * The engine traps exits, so a linked owner crashing, `stop/1`, or an
+      ordinary exit still runs `terminate/2`, which closes the fd. A `:kill`
+      exit (`Process.exit(engine, :kill)`) is the exception: it bypasses
+      `terminate/2`, and while a `select` is armed the fd and its URB memory
+      stay pinned by the NIF resource until the VM shuts down, because the GC
+      destructor cannot run with an outstanding select. Stop the engine with
+      `stop/1` (or let it exit normally); do not brutal-kill it.
   """
 
   use GenServer

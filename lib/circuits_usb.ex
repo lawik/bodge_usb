@@ -53,6 +53,7 @@ defmodule CircuitsUsb do
   alias CircuitsUsb.Descriptor
   alias CircuitsUsb.Enumeration
   alias CircuitsUsb.Hotplug
+  alias CircuitsUsb.Shim
   alias CircuitsUsb.Transfer
 
   @typedoc "An open device (a transfer-engine process)."
@@ -76,10 +77,22 @@ defmodule CircuitsUsb do
   @doc """
   Open a device and start its transfer engine. Accepts a `DeviceRef`, a usbfs
   path, or a `vendor_id, product_id` pair. Returns `{:ok, device}`.
+
+  The engine is linked to the caller, so the fd is released if the caller dies.
+  A device that cannot be opened (permissions, unplugged, busy) returns
+  `{:error, reason}` and never disturbs the caller: the fd is opened before the
+  engine is started, so a failed open starts no process to crash a non-trapping
+  caller through the link. (Contrast `CircuitsUsb.Transfer.start_link/1` with a
+  `:node`, which opens inside `init` and so exits the caller on failure.)
   """
   @spec open(Enumeration.DeviceRef.t() | Path.t()) :: GenServer.on_start()
-  def open(%Enumeration.DeviceRef{path: path}), do: Transfer.start_link(node: path)
-  def open(path) when is_binary(path), do: Transfer.start_link(node: path)
+  def open(%Enumeration.DeviceRef{path: path}), do: open(path)
+
+  def open(path) when is_binary(path) do
+    with {:ok, handle} <- Shim.open(path, [:rdwr]) do
+      Transfer.start_link(handle: handle)
+    end
+  end
 
   @spec open(0..0xFFFF, 0..0xFFFF) :: GenServer.on_start() | {:error, :not_found}
   def open(vendor_id, product_id) do

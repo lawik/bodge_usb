@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install a matching Erlang/Elixir toolchain in the guest via mise, so the
-# circuits_usb library can be built and run against the harness inside
+# bodge_usb library can be built and run against the harness inside
 # the VM. Runs IN the guest. Idempotent. The OTP build is from source (~10-15
 # min); a trimmed configure keeps it lean.
 #

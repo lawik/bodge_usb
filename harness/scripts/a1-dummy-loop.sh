@@ -47,7 +47,7 @@ setup_gadget() {
 
   mkdir -p "$GADGET_DIR/strings/0x409"
   echo "$SERIAL"        > "$GADGET_DIR/strings/0x409/serialnumber"
-  echo "circuits_usb"   > "$GADGET_DIR/strings/0x409/manufacturer"
+  echo "bodge_usb"   > "$GADGET_DIR/strings/0x409/manufacturer"
   echo "A1 loopback ACM" > "$GADGET_DIR/strings/0x409/product"
 
   mkdir -p "$GADGET_DIR/configs/c.1/strings/0x409"

@@ -1,12 +1,12 @@
-# Build the circuits_usb NIF. Invoked by elixir_make during `mix compile`.
+# Build the bodge_usb NIF. Invoked by elixir_make during `mix compile`.
 #
 # elixir_make provides MIX_APP_PATH, ERTS_INCLUDE_DIR and ERL_EI_INCLUDE_DIR.
 # Linux only: undefined ERTS symbols are resolved by the VM at NIF load time.
 
 PREFIX = $(MIX_APP_PATH)/priv
-NIF    = $(PREFIX)/circuits_usb_nif.so
+NIF    = $(PREFIX)/bodge_usb_nif.so
 
-SRC     = c_src/circuits_usb_nif.c
+SRC     = c_src/bodge_usb_nif.c
 HEADERS = $(wildcard c_src/*.h)
 
 CFLAGS ?= -O2 -Wall -Wextra

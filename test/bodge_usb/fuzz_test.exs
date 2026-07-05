@@ -1,8 +1,8 @@
-defmodule CircuitsUsb.FuzzTest do
+defmodule BodgeUSB.FuzzTest do
   use ExUnit.Case, async: true
 
-  alias CircuitsUsb.Descriptor
-  alias CircuitsUsb.Hotplug
+  alias BodgeUSB.Descriptor
+  alias BodgeUSB.Hotplug
 
   @moduledoc """
   Seeded, deterministic fuzz of the parsing surfaces (host-safe, no device).
@@ -108,12 +108,10 @@ defmodule CircuitsUsb.FuzzTest do
     for _ <- 1..1500 do
       input = random_binary()
       assert_total(&Descriptor.decode_string/1, input)
-      assert_total(&Descriptor.language_ids/1, input)
 
       # Descriptor-framed variant: a lying bLength over random UTF-16ish bytes.
       framed = <<:rand.uniform(256) - 1, 3>> <> input
       assert_total(&Descriptor.decode_string/1, framed)
-      assert_total(&Descriptor.language_ids/1, framed)
     end
   end
 

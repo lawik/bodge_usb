@@ -1,9 +1,8 @@
-defmodule CircuitsUsb.EnumerationTest do
+defmodule BodgeUSB.EnumerationTest do
   use ExUnit.Case, async: false
 
-  alias CircuitsUsb.Descriptor.Device
-  alias CircuitsUsb.Enumeration
-  alias CircuitsUsb.Shim
+  alias BodgeUSB.Descriptor.Device
+  alias BodgeUSB.Enumeration
 
   describe "on a host without usbfs" do
     test "list_devices/1 returns [] for a missing root" do
@@ -11,12 +10,12 @@ defmodule CircuitsUsb.EnumerationTest do
     end
   end
 
-  # Integration against the live gadget-zero node (harness A2). Set
-  # CIRCUITS_USB_TEST_NODE to /dev/bus/usb/BBB/DDD.
+  # Integration against the live gadget-zero node from the harness. Set
+  # BODGE_USB_TEST_NODE to /dev/bus/usb/BBB/DDD.
   describe "against a real usbfs node" do
     @tag :usbfs
     test "read_descriptors/1 parses the gadget-zero device + config" do
-      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
+      node = System.get_env("BODGE_USB_TEST_NODE") || flunk("set BODGE_USB_TEST_NODE")
 
       assert {:ok, %Device{} = d} = Enumeration.read_descriptors(node)
       assert d.vendor_id == 0x0525
@@ -32,14 +31,15 @@ defmodule CircuitsUsb.EnumerationTest do
     end
 
     @tag :usbfs
-    test "string/3 reads the product string" do
-      node = System.get_env("CIRCUITS_USB_TEST_NODE") || flunk("set CIRCUITS_USB_TEST_NODE")
-      {:ok, h} = Shim.open(node, [:rdwr])
+    test "BodgeUSB.string/3 reads the product string" do
+      node = System.get_env("BODGE_USB_TEST_NODE") || flunk("set BODGE_USB_TEST_NODE")
       {:ok, d} = Enumeration.read_descriptors(node)
+      {:ok, eng} = BodgeUSB.open(node)
 
-      assert {:ok, product} = Enumeration.string(h, d.product_index)
+      assert {:ok, product} = BodgeUSB.string(eng, d.product_index)
       assert product =~ "Gadget Zero"
-      Shim.close(h)
+      assert {:error, :no_string} = BodgeUSB.string(eng, 0)
+      BodgeUSB.close(eng)
     end
 
     @tag :usbfs

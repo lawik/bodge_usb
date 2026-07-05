@@ -1,10 +1,11 @@
-defmodule CircuitsUsb.RecoveryTest do
+defmodule BodgeUSB.RecoveryTest do
   use ExUnit.Case, async: false
 
-  alias CircuitsUsb.Descriptor
-  alias CircuitsUsb.Enumeration
-  alias CircuitsUsb.Shim
-  alias CircuitsUsb.Transfer
+  import BodgeUSB.TestHelpers
+
+  alias BodgeUSB.Descriptor
+  alias BodgeUSB.Enumeration
+  alias BodgeUSB.Nif
 
   @gzero_vendor 0x0525
   @gzero_product 0xA4A0
@@ -16,25 +17,25 @@ defmodule CircuitsUsb.RecoveryTest do
       {:ok, dev} = Enumeration.read_descriptors(node)
       {iface, ep_in, _ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
 
-      {:ok, h} = Shim.open(node, [:rdwr])
+      {:ok, eng} = BodgeUSB.open(node)
 
       try do
-        :ok = Shim.claim_interface(h, iface)
+        :ok = BodgeUSB.claim_interface(eng, iface)
 
         # Halt the endpoint: SET_FEATURE(ENDPOINT_HALT). bmRequestType 0x02 =
         # host->device, standard, endpoint recipient; bRequest 0x03 = SET_FEATURE;
         # wValue 0 = ENDPOINT_HALT; wIndex = endpoint address.
-        assert {:ok, 0} = Shim.control_transfer(h, 0x02, 0x03, 0x0000, ep_in, "", 1000)
+        assert {:ok, 0} = BodgeUSB.control_transfer(eng, 0x02, 0x03, 0x0000, ep_in, "", 1000)
 
         # Transfers on the halted endpoint stall with :epipe.
-        assert {:error, :epipe} = Shim.bulk_in(h, ep_in, 512, 1000)
+        assert {:error, :epipe} = BodgeUSB.bulk_in(eng, ep_in, 512, 1000)
 
         # Recover, then it works again.
-        assert :ok = Shim.clear_halt(h, ep_in)
-        assert {:ok, <<_::512-bytes>>} = Shim.bulk_in(h, ep_in, 512, 1000)
+        assert :ok = BodgeUSB.clear_halt(eng, ep_in)
+        assert {:ok, <<_::512-bytes>>} = BodgeUSB.bulk_in(eng, ep_in, 512, 1000)
       after
-        Shim.release_interface(h, iface)
-        Shim.close(h)
+        BodgeUSB.release_interface(eng, iface)
+        BodgeUSB.close(eng)
       end
     end
   end
@@ -43,9 +44,9 @@ defmodule CircuitsUsb.RecoveryTest do
     @tag :usbfs_reset
     test "reset succeeds and the device comes back usable" do
       node = find_gzero() || flunk("no gadget zero")
-      {:ok, h} = Shim.open(node, [:rdwr])
-      assert :ok = Shim.reset(h)
-      Shim.close(h)
+      {:ok, h} = Nif.open(node, [:rdwr])
+      assert :ok = Nif.reset(h)
+      Nif.close(h)
 
       # The device re-enumerates (possibly at a new address). It must come
       # back, and its descriptors must read and parse: reset that leaves the
@@ -74,11 +75,11 @@ defmodule CircuitsUsb.RecoveryTest do
       {:ok, dev} = Enumeration.read_descriptors(node)
       {iface, ep_in, _ep_out} = find_bulk_pair(dev) || flunk("no bulk pair")
 
-      {:ok, eng} = Transfer.start_link(node: node)
-      :ok = Transfer.claim_interface(eng, iface)
+      {:ok, eng} = BodgeUSB.start_link(node: node)
+      :ok = BodgeUSB.claim_interface(eng, iface)
 
       # Start a slow (~40ms) read, then rip the device away mid-flight.
-      task = Task.async(fn -> Transfer.bulk_in(eng, ep_in, 1_048_576, 5000) end)
+      task = Task.async(fn -> BodgeUSB.bulk_in(eng, ep_in, 1_048_576, 5000) end)
       Process.sleep(5)
       System.cmd("rmmod", ["g_zero"], stderr_to_stdout: true)
 
@@ -88,9 +89,9 @@ defmodule CircuitsUsb.RecoveryTest do
 
       # The engine is still alive and further ops fail cleanly (device gone).
       assert Process.alive?(eng)
-      assert match?({:error, _}, Transfer.bulk_in(eng, ep_in, 64, 500))
+      assert match?({:error, _}, BodgeUSB.bulk_in(eng, ep_in, 64, 500))
 
-      assert :ok = Transfer.stop(eng)
+      assert :ok = BodgeUSB.close(eng)
     end
   end
 
@@ -103,16 +104,6 @@ defmodule CircuitsUsb.RecoveryTest do
         _ ->
           nil
       end
-    end)
-  end
-
-  defp find_bulk_pair(dev) do
-    Enum.find_value(dev.configurations, fn c ->
-      Enum.find_value(c.interfaces, fn i ->
-        ep_in = Enum.find(i.endpoints, &(&1.transfer_type == :bulk and &1.direction == :in))
-        ep_out = Enum.find(i.endpoints, &(&1.transfer_type == :bulk and &1.direction == :out))
-        if ep_in && ep_out, do: {i.number, ep_in.address, ep_out.address}
-      end)
     end)
   end
 end

@@ -23,7 +23,7 @@ erl_crash.dump
 *.ez
 
 # Ignore package tarball (built via "mix hex.build").
-circuits_usb-*.tar
+bodge_usb-*.tar
 
 # Harness build products and fetched upstream sources.
 harness/artifacts/

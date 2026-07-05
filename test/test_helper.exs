@@ -6,6 +6,7 @@
 #   :usbfs_int    - HID gadget (interrupt transfers)
 #   :usbfs_iso    - QEMU usb-audio device (isochronous transfers)
 #   :usbfs_reset / :usbfs_disconnect - g_zero recovery (disrupt the gadget, run isolated)
+#   :usbfs_a3_*   - raw-gadget adversarial device faults
 ExUnit.start(
   exclude: [
     :usbfs,
@@ -17,8 +18,6 @@ ExUnit.start(
     :usbfs_hotplug,
     :usbfs_a3_stall,
     :usbfs_a3_blength,
-    :usbfs_a3_slow,
-    :usbfs_gadget,
-    :usbfs_ffs
+    :usbfs_a3_slow
   ]
 )

@@ -1,18 +1,19 @@
-defmodule CircuitsUsb.MixProject do
+defmodule BodgeUSB.MixProject do
   use Mix.Project
 
   def project do
     [
-      app: :circuits_usb,
+      app: :bodge_usb,
       version: "0.1.0",
       elixir: "~> 1.20",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: elixirc_paths(Mix.env()),
       compilers: [:elixir_make] ++ Mix.compilers(),
       make_targets: ["all"],
       make_clean: ["clean"],
       deps: deps(),
-      name: "Circuits usb",
-      description: "Native USB for Elixir on Linux via a usbfs-scoped syscall NIF",
+      name: "BodgeUSB",
+      description: "Talk to USB devices from Elixir on Linux via a usbfs-scoped syscall NIF",
       docs: docs(),
       package: package(),
       aliases: aliases(),
@@ -20,27 +21,40 @@ defmodule CircuitsUsb.MixProject do
     ]
   end
 
-  # Run "mix help compile.app" to learn about applications.
   def application do
     [
       extra_applications: [:logger]
     ]
   end
 
+  defp elixirc_paths(:test), do: ["lib", "test/support"]
+  defp elixirc_paths(_), do: ["lib"]
+
   def docs do
     [
       main: "readme",
-      source_url: "https://github.com/lawik/circuits_usb",
+      source_url: "https://github.com/lawik/bodge_usb",
       source_ref: "main",
-      extras: ["README.md"]
+      extras: ["README.md", "CHANGELOG.md"]
     ]
   end
 
   def package do
     [
-      name: :circuits_usb,
+      name: :bodge_usb,
+      # Hex's default file set excludes c_src/ and the Makefile, without which
+      # the package cannot compile.
+      files: [
+        "lib",
+        "c_src",
+        "Makefile",
+        "mix.exs",
+        "README.md",
+        "LICENSE.md",
+        "CHANGELOG.md"
+      ],
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => "https://github.com/lawik/circuits_usb"}
+      links: %{"GitHub" => "https://github.com/lawik/bodge_usb"}
     ]
   end
 
@@ -81,18 +95,14 @@ defmodule CircuitsUsb.MixProject do
     ]
   end
 
-  # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
       {:elixir_make, "~> 0.8", runtime: false},
       {:nstandard, "~> 0.5", runtime: false},
-      {:igniter, "~> 0.6", only: [:dev, :test]},
       {:ex_doc, "~> 0.40", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
       {:spellweaver, "~> 0.1.8", only: [:dev, :test], runtime: false}
-      # {:dep_from_hexpm, "~> 0.3.0"},
-      # {:dep_from_git, git: "https://github.com/elixir-lang/my_dep.git", tag: "0.1.0"}
     ]
   end
 end

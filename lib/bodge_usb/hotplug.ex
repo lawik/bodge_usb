@@ -1,22 +1,15 @@
-defmodule CircuitsUsb.Hotplug do
-  @moduledoc """
-  USB hotplug notifications.
+defmodule BodgeUSB.Hotplug do
+  @moduledoc false
 
-  Watches the kernel `NETLINK_KOBJECT_UEVENT` broadcast socket and delivers
-  device add/remove events to subscribers as `{:usb_hotplug, event}` messages,
-  where `event` is a map:
-
-      %{action: :add | :remove | :bind | :unbind | :change,
-        busnum: integer | nil, devnum: integer | nil,
-        devname: "/dev/bus/usb/BBB/DDD" | nil, devpath: String.t(), product: String.t() | nil}
-
-  Only device-level USB events (`SUBSYSTEM=usb`, `DEVTYPE=usb_device`) are
-  reported. Opening the socket usually needs root.
-  """
+  # USB hotplug watcher: reads the kernel NETLINK_KOBJECT_UEVENT broadcast
+  # socket and delivers device-level add/remove events to subscribers as
+  # {:usb_hotplug, event} messages. Start it via BodgeUSB.watch_hotplug/1,
+  # which documents the event shape. Only device-level USB events
+  # (SUBSYSTEM=usb, DEVTYPE=usb_device) are reported.
 
   use GenServer
 
-  alias CircuitsUsb.Shim
+  alias BodgeUSB.Nif
 
   require Logger
 
@@ -29,19 +22,17 @@ defmodule CircuitsUsb.Hotplug do
           product: String.t() | nil
         }
 
-  @doc """
-  Start watching. `:notify` (a pid or list of pids) receives events; defaults to
-  the caller. `:name` optionally names the server.
-  """
+  # The socket is opened before the watcher is started, so a failed open (no
+  # root, typically) returns {:error, reason} without starting a process to
+  # crash a non-trapping caller through the link.
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts \\ []) do
-    opts = Keyword.put_new(opts, :notify, self())
-    GenServer.start_link(__MODULE__, opts, Keyword.take(opts, [:name]))
-  end
+    subscribers = opts |> Keyword.get(:notify, self()) |> List.wrap()
 
-  @doc "Add a subscriber pid."
-  @spec subscribe(GenServer.server(), pid()) :: :ok
-  def subscribe(server, pid \\ self()), do: GenServer.call(server, {:subscribe, pid})
+    with {:ok, handle} <- Nif.netlink_uevent_open() do
+      GenServer.start_link(__MODULE__, {handle, subscribers}, Keyword.take(opts, [:name]))
+    end
+  end
 
   @spec stop(GenServer.server()) :: :ok
   def stop(server), do: GenServer.stop(server)
@@ -49,22 +40,9 @@ defmodule CircuitsUsb.Hotplug do
   # ---- server ------------------------------------------------------------
 
   @impl true
-  def init(opts) do
-    case Shim.netlink_uevent_open() do
-      {:ok, handle} ->
-        subscribers = opts |> Keyword.fetch!(:notify) |> List.wrap()
-        Enum.each(subscribers, &Process.monitor/1)
-        {:ok, arm(%{handle: handle, ref: make_ref(), subscribers: MapSet.new(subscribers)})}
-
-      {:error, reason} ->
-        {:stop, reason}
-    end
-  end
-
-  @impl true
-  def handle_call({:subscribe, pid}, _from, state) do
-    Process.monitor(pid)
-    {:reply, :ok, %{state | subscribers: MapSet.put(state.subscribers, pid)}}
+  def init({handle, subscribers}) do
+    Enum.each(subscribers, &Process.monitor/1)
+    {:ok, arm(%{handle: handle, ref: make_ref(), subscribers: MapSet.new(subscribers)})}
   end
 
   @impl true
@@ -82,7 +60,7 @@ defmodule CircuitsUsb.Hotplug do
 
   @impl true
   def terminate(_reason, state) do
-    Shim.close(state.handle)
+    Nif.close(state.handle)
     :ok
   end
 
@@ -91,7 +69,7 @@ defmodule CircuitsUsb.Hotplug do
   # One uevent per datagram; read until EAGAIN. netlink_read/2 verifies the
   # kernel is the sender and drops anything else as an empty payload.
   defp drain(handle, acc) do
-    case Shim.netlink_read(handle, 8192) do
+    case Nif.netlink_read(handle, 8192) do
       {:ok, data} when byte_size(data) > 0 ->
         case parse_uevent(data) do
           {:ok, event} -> drain(handle, [event | acc])
@@ -111,7 +89,7 @@ defmodule CircuitsUsb.Hotplug do
         # ENOBUFS means the kernel dropped uevents on socket overrun; anything
         # else is equally worth surfacing -- never swallow it silently.
         Logger.warning(
-          "CircuitsUsb.Hotplug: uevent read failed: #{inspect(reason)} " <>
+          "BodgeUSB.Hotplug: uevent read failed: #{inspect(reason)} " <>
             "(events may have been lost)"
         )
 
@@ -120,13 +98,13 @@ defmodule CircuitsUsb.Hotplug do
   end
 
   defp arm(state) do
-    case Shim.select_read(state.handle, state.ref) do
+    case Nif.select_read(state.handle, state.ref) do
       :ok ->
         :ok
 
       {:error, reason} ->
         # The watcher would otherwise go silently deaf.
-        Logger.warning("CircuitsUsb.Hotplug: select_read failed: #{inspect(reason)}")
+        Logger.warning("BodgeUSB.Hotplug: select_read failed: #{inspect(reason)}")
     end
 
     state
@@ -138,6 +116,7 @@ defmodule CircuitsUsb.Hotplug do
 
   @doc false
   # A uevent datagram is a header line then NUL-separated key=value fields.
+  # Public for the fuzz suite.
   @spec parse_uevent(binary()) :: {:ok, event()} | :skip
   def parse_uevent(data) do
     fields =

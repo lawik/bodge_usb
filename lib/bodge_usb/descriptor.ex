@@ -1,4 +1,4 @@
-defmodule CircuitsUsb.Descriptor do
+defmodule BodgeUSB.Descriptor do
   @moduledoc """
   USB descriptor parsing.
 
@@ -68,13 +68,17 @@ defmodule CircuitsUsb.Descriptor do
               interfaces: [],
               extra: []
 
+    @typedoc """
+    Header fields are `nil` when the configuration header itself was
+    undersized; its raw bytes are preserved in `extra`.
+    """
     @type t :: %__MODULE__{
-            value: 0..0xFF,
-            total_length: non_neg_integer(),
-            num_interfaces: 0..0xFF,
-            configuration_index: 0..0xFF,
-            attributes: 0..0xFF,
-            max_power_ma: non_neg_integer(),
+            value: 0..0xFF | nil,
+            total_length: non_neg_integer() | nil,
+            num_interfaces: 0..0xFF | nil,
+            configuration_index: 0..0xFF | nil,
+            attributes: 0..0xFF | nil,
+            max_power_ma: non_neg_integer() | nil,
             interfaces: [Interface.t()],
             extra: [map()]
           }
@@ -188,7 +192,6 @@ defmodule CircuitsUsb.Descriptor do
     case walk(binary, []) do
       {:ok, [%{type: @dt_configuration} | _] = raws} ->
         case group_configurations(raws) do
-          [config] -> {:ok, config}
           [config | _] -> {:ok, config}
           [] -> {:error, :not_a_configuration_descriptor}
         end
@@ -203,7 +206,7 @@ defmodule CircuitsUsb.Descriptor do
 
   @doc """
   Decode a string descriptor's bytes (`<<bLength, 0x03, utf16le...>>`) to a
-  UTF-8 string. For index 0 the payload is a LANGID array; use `language_ids/1`.
+  UTF-8 string. Index 0 is not a string (its payload is the LANGID array).
   """
   @spec decode_string(binary()) :: {:ok, String.t()} | {:error, :invalid_string}
   def decode_string(<<b_length, @dt_string, rest::binary>>) when b_length >= 2 do
@@ -217,16 +220,6 @@ defmodule CircuitsUsb.Descriptor do
   end
 
   def decode_string(_), do: {:error, :invalid_string}
-
-  @doc "Decode the LANGID list from a string-index-0 descriptor."
-  @spec language_ids(binary()) :: {:ok, [0..0xFFFF]} | {:error, :invalid_string}
-  def language_ids(<<b_length, @dt_string, rest::binary>>) when b_length >= 2 do
-    take = min(b_length - 2, byte_size(rest))
-    <<langids::binary-size(^take), _::binary>> = rest
-    {:ok, for(<<id::little-16 <- langids>>, do: id)}
-  end
-
-  def language_ids(_), do: {:error, :invalid_string}
 
   # ---- internal: walk a descriptor list defensively ----------------------
 
@@ -266,7 +259,15 @@ defmodule CircuitsUsb.Descriptor do
   # interface accumulates endpoints. Unknown descriptors attach to the nearest
   # enclosing interface (or config) as `extra`, never dropped, never crashing.
   defp attach(%{type: @dt_configuration} = raw, configs) do
-    [%{config: parse_config_header(raw), interfaces: [], extra: []} | configs]
+    case parse_config_header(raw) do
+      nil ->
+        # undersized config header: keep an empty config carrying the raw bytes
+        # as extra, so following descriptors still have somewhere to attach.
+        [%{config: %Configuration{}, interfaces: [], extra: [strip(raw)]} | configs]
+
+      %Configuration{} = header ->
+        [%{config: header, interfaces: [], extra: []} | configs]
+    end
   end
 
   defp attach(%{type: @dt_interface} = raw, [cfg | rest]) do
@@ -342,8 +343,7 @@ defmodule CircuitsUsb.Descriptor do
     }
   end
 
-  defp parse_config_header(%{data: data}),
-    do: %Configuration{value: nil, total_length: byte_size(data)}
+  defp parse_config_header(_undersized), do: nil
 
   defp parse_interface_header(%{
          data: <<_bl, _bt, number, alt, _num_eps, class, subclass, protocol, i_iface, _::binary>>

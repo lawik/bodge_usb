@@ -1,8 +1,8 @@
-defmodule CircuitsUsb.DescriptorTest do
+defmodule BodgeUSB.DescriptorTest do
   use ExUnit.Case, async: true
 
-  alias CircuitsUsb.Descriptor
-  alias CircuitsUsb.Descriptor.{Configuration, Device, Endpoint, Interface}
+  alias BodgeUSB.Descriptor
+  alias BodgeUSB.Descriptor.{Configuration, Device, Endpoint, Interface}
 
   # A well-formed device with one config, one interface, two bulk endpoints.
   @device <<18, 1, 0x00, 0x02, 0, 0, 0, 64, 0x25, 0x05, 0xA0, 0xA4, 0x01, 0x00, 1, 2, 3, 1>>
@@ -55,7 +55,7 @@ defmodule CircuitsUsb.DescriptorTest do
     end
   end
 
-  describe "parse/1 routes undersized interface/endpoint descriptors to extra (L4)" do
+  describe "parse/1 routes undersized interface/endpoint descriptors to extra" do
     test "undersized interface descriptor becomes config extra, not an all-nil interface" do
       # bLength 6, shorter than the 9 an interface header needs.
       bad_iface = <<6, 4, 0, 0, 2, 0xFF>>
@@ -84,7 +84,7 @@ defmodule CircuitsUsb.DescriptorTest do
     end
   end
 
-  describe "parse/1 degrades safely on the A3 malformation catalog" do
+  describe "parse/1 degrades safely on the adversarial malformation catalog" do
     test "short device descriptor" do
       assert {:error, :short_device_descriptor} = Descriptor.parse(<<8, 1, 0, 0>>)
       assert {:error, :short_device_descriptor} = Descriptor.parse(<<>>)
@@ -155,10 +155,6 @@ defmodule CircuitsUsb.DescriptorTest do
 
     test "decode_string/1 rejects a non-string descriptor" do
       assert {:error, :invalid_string} = Descriptor.decode_string(<<4, 2, 0, 0>>)
-    end
-
-    test "language_ids/1 parses the LANGID array" do
-      assert {:ok, [0x0409]} = Descriptor.language_ids(<<4, 3, 0x09, 0x04>>)
     end
   end
 end

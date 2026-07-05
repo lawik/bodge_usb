@@ -1,9 +1,9 @@
-defmodule CircuitsUsb.HotplugTest do
+defmodule BodgeUSB.HotplugTest do
   use ExUnit.Case, async: false
 
-  alias CircuitsUsb.Hotplug
+  alias BodgeUSB.Hotplug
 
-  # Scripted hotplug churn (A5): a gadget appears and disappears; the library
+  # Scripted hotplug churn: a gadget appears and disappears; the library
   # observes it over the netlink uevent socket. Needs dummy_hcd loaded and g_zero
   # not loaded on entry (verify.sh :usbfs_hotplug phase). Runs as root.
   describe "hotplug notifications" do
@@ -13,7 +13,7 @@ defmodule CircuitsUsb.HotplugTest do
       System.cmd("rmmod", ["g_zero"], stderr_to_stdout: true)
       Process.sleep(300)
 
-      {:ok, hp} = CircuitsUsb.watch_hotplug(notify: self())
+      {:ok, hp} = BodgeUSB.watch_hotplug(notify: self())
       flush_hotplug()
 
       try do

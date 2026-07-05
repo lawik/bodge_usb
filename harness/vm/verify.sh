@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs IN the guest, as root. End-to-end library verification against real usbfs:
-#   1. build + host-safe tests of the circuits_usb mix project (guest toolchain)
+#   1. build + host-safe tests of the bodge_usb mix project (guest toolchain)
 #   2. bring up a real usbfs node (dummy_hcd + g_zero)
 #   3. run the :usbfs integration test (Shim.open -> read descriptor -> close)
 #
@@ -12,7 +12,7 @@ set -euo pipefail
 SRC=/mnt/repo
 DEV_HOME=/home/dev
 MISE="$DEV_HOME/.local/bin/mise"
-PROJ=/root/circuits_usb
+PROJ=/root/bodge_usb
 HARNESS=/root/harness
 ARTIFACTS=/mnt/repo/harness/artifacts  # written back to the host via the 9p share
 
@@ -101,14 +101,14 @@ for _ in $(seq 1 30); do
   sleep 0.1
 done
 echo "== :usbfs_driver tests (usbtest bound) =="
-CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only usbfs_driver
+BODGE_USB_TEST_NODE="$node" run_mix mix test --only usbfs_driver
 
 # Phase B -- bulk/async tests need the interface free, so drop usbtest (whose
 # claim on the interface would otherwise block our claim_interface with EBUSY).
 modprobe -r usbtest 2>/dev/null || rmmod usbtest 2>/dev/null || true
 
 echo "== :usbfs integration test =="
-CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only usbfs
+BODGE_USB_TEST_NODE="$node" run_mix mix test --only usbfs
 
 # Recovery tests that disrupt the gadget, run isolated and in order: reset
 # re-enumerates g_zero (it stays up); disconnect then rmmods it. Both discover
@@ -146,7 +146,7 @@ run_a3_phase() {
   done
   if [ -n "$node" ]; then
     echo "a3 '$fault' node: $node"
-    CIRCUITS_USB_TEST_NODE="$node" run_mix mix test --only "$tag"
+    BODGE_USB_TEST_NODE="$node" run_mix mix test --only "$tag"
   else
     echo "ERROR: a3 '$fault' device did not enumerate"; kill "$a3pid" 2>/dev/null || true; exit 1
   fi
@@ -161,25 +161,10 @@ run_a3_phase bad-device-blength usbfs_a3_blength
 echo "== :usbfs_a3_slow (live raw-gadget slow) =="
 run_a3_phase slow usbfs_a3_slow
 
-# The library plays BOTH roles: CircuitsUsb.Gadget defines a HID
-# gadget via configfs and binds it to dummy_udc.0, while the host tier of the
-# same library enumerates it and exchanges interrupt reports with it.
-echo "== :usbfs_gadget tests (library-defined configfs gadget) =="
-teardown_configfs_gadgets
-rmmod g_zero 2>/dev/null || true
-modprobe libcomposite usb_f_hid
-run_mix mix test --only usbfs_gadget
-teardown_configfs_gadgets
-
-# FunctionFS: the library serves a *custom* function from userspace
-# (toy vendor protocol over ep0 + bulk echo over epN) and drives it with its
-# own host tier.
-echo "== :usbfs_ffs tests (FunctionFS custom function) =="
-teardown_configfs_gadgets
-modprobe libcomposite usb_f_fs
-run_mix mix test --only usbfs_ffs
-umount /dev/ffs-circuits 2>/dev/null || true
-teardown_configfs_gadgets
+# Device-side (:usbfs_gadget / :usbfs_ffs) tests moved to the bodge_usb_gadget
+# library, which drives them with bodge_usb as its host end. Run them from that
+# repo inside this VM (copy it to guest-local storage like $PROJ above), with
+# libcomposite + usb_f_hid / usb_f_fs loaded.
 
 # Phase C -- interrupt transfers need an interrupt endpoint; g_zero has
 # none, so switch to a configfs HID gadget (interrupt IN + OUT). The gadget
@@ -246,7 +231,7 @@ mkdir -p "$ARTIFACTS"
 trace="$ARTIFACTS/b7-interrupt.usbmon"
 "$HARNESS/scripts/a4-usbmon.sh" start "$busnum" "$trace" 2>/dev/null || true
 
-CIRCUITS_USB_TEST_NODE="$hidnode" run_mix mix test --only usbfs_int
+BODGE_USB_TEST_NODE="$hidnode" run_mix mix test --only usbfs_int
 
 "$HARNESS/scripts/a4-usbmon.sh" stop "$trace" 2>/dev/null || true
 kill "$hidwriter" 2>/dev/null || true

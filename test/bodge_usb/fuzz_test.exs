@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule BodgeUSB.FuzzTest do
   use ExUnit.Case, async: true
 
@@ -43,6 +47,9 @@ defmodule BodgeUSB.FuzzTest do
     end
   end
 
+  defp split_at(blob, pos),
+    do: {binary_part(blob, 0, pos), binary_part(blob, pos, byte_size(blob) - pos)}
+
   # One random structured mutation of the valid blob. Chained mutations can
   # shrink the input, so every arm must tolerate any current size.
   defp mutate(blob) when byte_size(blob) == 0, do: random_binary()
@@ -54,7 +61,7 @@ defmodule BodgeUSB.FuzzTest do
       # overwrite one random byte with a random value
       1 ->
         pos = :rand.uniform(size) - 1
-        <<pre::binary-size(^pos), _b, post::binary>> = blob
+        {pre, <<_b, post::binary>>} = split_at(blob, pos)
         <<pre::binary, :rand.uniform(256) - 1, post::binary>>
 
       # truncate at a random point
@@ -70,13 +77,13 @@ defmodule BodgeUSB.FuzzTest do
           |> Enum.random()
 
         val = Enum.random([0, 1, 2, 255, :rand.uniform(256) - 1])
-        <<pre::binary-size(^pos), _b, post::binary>> = blob
+        {pre, <<_b, post::binary>>} = split_at(blob, pos)
         <<pre::binary, val, post::binary>>
 
       # splice random garbage into the middle
       4 ->
         pos = :rand.uniform(size) - 1
-        <<pre::binary-size(^pos), post::binary>> = blob
+        {pre, post} = split_at(blob, pos)
         pre <> random_binary() <> post
 
       # duplicate a random slice (repeated/nested descriptors)

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # shellcheck shell=bash
 # Shared helpers for the USB test harness.
 # Source this from every harness script:  . "$(dirname "$0")/../lib/common.sh"

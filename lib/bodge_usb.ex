@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule BodgeUSB do
   @moduledoc """
   Host-side USB for Elixir on Linux, over a usbfs-scoped syscall NIF.
@@ -46,8 +50,6 @@ defmodule BodgeUSB do
   """
 
   use GenServer
-
-  import Bitwise
 
   alias BodgeUSB.Descriptor
   alias BodgeUSB.DeviceRef
@@ -409,23 +411,25 @@ defmodule BodgeUSB do
 
   # ---- request validation ------------------------------------------------
 
+  # Direction is bit 7 of the endpoint address / bmRequestType, so IN is
+  # 0x80..0xFF and OUT is 0x00..0x7F.
   defp validate_request!({:bulk_in, ep, len})
-       when ep in 0..255 and (ep &&& 0x80) == 0x80 and is_integer(len) and len >= 0,
+       when ep in 0x80..0xFF and is_integer(len) and len >= 0,
        do: :ok
 
-  defp validate_request!({:bulk_out, ep, data}) when ep in 0..255 and (ep &&& 0x80) == 0,
+  defp validate_request!({:bulk_out, ep, data}) when ep in 0x00..0x7F,
     do: validate_iodata!(data)
 
   defp validate_request!({:interrupt_in, ep, len})
-       when ep in 0..255 and (ep &&& 0x80) == 0x80 and is_integer(len) and len >= 0,
+       when ep in 0x80..0xFF and is_integer(len) and len >= 0,
        do: :ok
 
-  defp validate_request!({:interrupt_out, ep, data}) when ep in 0..255 and (ep &&& 0x80) == 0,
+  defp validate_request!({:interrupt_out, ep, data}) when ep in 0x00..0x7F,
     do: validate_iodata!(data)
 
   defp validate_request!({:control, rtype, req, value, index, dl})
        when rtype in 0..255 and req in 0..255 and value in 0..0xFFFF and index in 0..0xFFFF do
-    if (rtype &&& 0x80) == 0x80 do
+    if rtype >= 0x80 do
       if is_integer(dl) and dl >= 0, do: :ok, else: bad_request({:control, :length, dl})
     else
       validate_iodata!(dl)
@@ -433,14 +437,14 @@ defmodule BodgeUSB do
   end
 
   defp validate_request!({:iso_in, ep, lengths})
-       when ep in 0..255 and (ep &&& 0x80) == 0x80 and is_list(lengths) and lengths != [] do
+       when ep in 0x80..0xFF and is_list(lengths) and lengths != [] do
     if Enum.all?(lengths, &(is_integer(&1) and &1 in 0..0xFFFF)),
       do: :ok,
       else: bad_request({:iso_in, :packet_lengths, lengths})
   end
 
   defp validate_request!({:iso_out, ep, lengths, data})
-       when ep in 0..255 and (ep &&& 0x80) == 0 and is_list(lengths) and lengths != [] do
+       when ep in 0x00..0x7F and is_list(lengths) and lengths != [] do
     validate_iodata!(data)
 
     if Enum.all?(lengths, &(is_integer(&1) and &1 in 0..0xFFFF)),

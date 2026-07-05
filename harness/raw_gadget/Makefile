@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 CC    ?= cc
 CFLAGS ?= -O2 -Wall -Wextra
 

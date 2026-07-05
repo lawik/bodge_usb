@@ -1,4 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-FileCopyrightText: 2026 Lars Wikman
+//
+// SPDX-License-Identifier: GPL-2.0-only
+//
+// GPL-2.0 (not Apache-2.0 like the rest of the repo) because the raw-gadget
+// interaction follows the kernel's GPL-2.0 raw_gadget examples.
 //
 // A3 -- Adversarial USB device over /dev/raw-gadget.
 //

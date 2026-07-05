@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Fetch a dummy_hcd.c that matches the running kernel closely enough to build.
 #
 # The kernel here is CONFIG_USB_DUMMY_HCD=n, so we grab upstream source. The

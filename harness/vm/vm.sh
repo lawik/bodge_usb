@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Manage a disposable, SSH-driven QEMU VM for running the USB harness as root
 # without touching the host. Ubuntu cloud image + cloud-init + a virtio-9p share
 # of this repo. KVM-accelerated. State lives outside the repo.
@@ -13,8 +17,15 @@
 #   destroy     power off and delete the disk overlay (keeps base image + seed)
 set -euo pipefail
 
-STATE="${CIRCUITS_VM_STATE:-$HOME/.local/share/circuits-usb-vm}"
+STATE="${BODGE_VM_STATE:-$HOME/.local/share/bodge-usb-vm}"
+# Migrate VM state from the pre-rename location (provisioned overlays are
+# expensive; the OTP toolchain build alone is ~20 minutes).
+OLD_STATE="$HOME/.local/share/circuits-usb-vm"
+if [ -d "$OLD_STATE" ] && [ ! -e "$STATE" ]; then mv "$OLD_STATE" "$STATE"; fi
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# Sibling bodge_usb_gadget checkout: shared into the guest (second 9p share)
+# when present, so verify.sh can run its device-backed tests too.
+GADGET_REPO="${BODGE_VM_GADGET:-$(dirname "$REPO")/bodge_usb_gadget}"
 KEY="$STATE/id_ed25519"
 BASE="$STATE/noble-cloudimg.qcow2"
 OVERLAY="$STATE/disk.qcow2"
@@ -22,11 +33,13 @@ SEED="$STATE/seed.iso"
 SERIAL="$STATE/serial.log"
 PIDFILE="$STATE/qemu.pid"
 MONITOR="$STATE/monitor.sock"
-SSH_PORT="${CIRCUITS_VM_SSH_PORT:-2222}"
-MEM="${CIRCUITS_VM_MEM:-8192}"
-CPUS="${CIRCUITS_VM_CPUS:-8}"
+SSH_PORT="${BODGE_VM_SSH_PORT:-2222}"
+MEM="${BODGE_VM_MEM:-8192}"
+CPUS="${BODGE_VM_CPUS:-8}"
 MOUNT_TAG=repo
+GADGET_MOUNT_TAG=gadget
 GUEST_REPO=/mnt/repo
+GUEST_GADGET=/mnt/gadget
 GUEST_HARNESS=/home/dev/harness
 GUEST_ARTIFACTS="$GUEST_REPO/harness/artifacts"
 
@@ -102,8 +115,16 @@ cmd_up() {
   make_seed
   make_overlay
   log "booting VM (kvm, ${CPUS} cpu, ${MEM}MB, ssh -> 127.0.0.1:${SSH_PORT})"
+  local gadget_args=()
+  if [ -d "$GADGET_REPO" ]; then
+    log "sharing gadget sibling $GADGET_REPO -> $GUEST_GADGET"
+    gadget_args=(
+      -fsdev "local,id=gadget,path=$GADGET_REPO,security_model=none"
+      -device "virtio-9p-pci,fsdev=gadget,mount_tag=$GADGET_MOUNT_TAG"
+    )
+  fi
   # An emulated xHCI + usb-audio device gives the guest a real isochronous
-  # endpoint (dummy_hcd cannot emulate isoc), for the B8 isochronous tests.
+  # endpoint (dummy_hcd cannot emulate isoc), for the isochronous tests.
   qemu-system-x86_64 \
     -enable-kvm -cpu host -smp "$CPUS" -m "$MEM" \
     -drive file="$OVERLAY",if=virtio,format=qcow2 \
@@ -112,6 +133,7 @@ cmd_up() {
     -device virtio-net-pci,netdev=net0 \
     -fsdev local,id=repo,path="$REPO",security_model=none \
     -device virtio-9p-pci,fsdev=repo,mount_tag="$MOUNT_TAG" \
+    "${gadget_args[@]}" \
     -audiodev none,id=snd0 \
     -device qemu-xhci,id=xhci \
     -device usb-audio,audiodev=snd0,bus=xhci.0 \
@@ -151,6 +173,8 @@ cmd_provision() {
 
 ensure_mount() {
   cmd_ssh "sudo mountpoint -q $GUEST_REPO || sudo mount -t 9p -o trans=virtio,version=9p2000.L,msize=262144 $MOUNT_TAG $GUEST_REPO"
+  # The gadget share only exists if the sibling checkout was present at boot.
+  cmd_ssh "sudo mountpoint -q $GUEST_GADGET 2>/dev/null || { sudo mkdir -p $GUEST_GADGET && sudo mount -t 9p -o trans=virtio,version=9p2000.L,msize=262144 $GADGET_MOUNT_TAG $GUEST_GADGET; }" 2>/dev/null || true
 }
 
 # Sync the harness subtree from the 9p share to guest-local storage. We build and

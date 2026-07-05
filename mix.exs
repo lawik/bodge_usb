@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule BodgeUSB.MixProject do
   use Mix.Project
 
@@ -5,7 +9,7 @@ defmodule BodgeUSB.MixProject do
     [
       app: :bodge_usb,
       version: "0.1.0",
-      elixir: "~> 1.20",
+      elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
       compilers: [:elixir_make] ++ Mix.compilers(),
@@ -51,6 +55,8 @@ defmodule BodgeUSB.MixProject do
         "mix.exs",
         "README.md",
         "LICENSE.md",
+        "LICENSES",
+        "REUSE.toml",
         "CHANGELOG.md"
       ],
       licenses: ["Apache-2.0"],

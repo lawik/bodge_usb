@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule BodgeUSB.DeviceRef do
   @moduledoc """
   A discovered usbfs device node and its parsed descriptors, as returned by

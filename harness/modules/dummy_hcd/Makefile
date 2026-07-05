@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Out-of-tree build of dummy_hcd against the running kernel.
 #
 # This kernel ships CONFIG_USB_DUMMY_HCD=n, so we compile the upstream

@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # A2 -- Reference stress (g_zero + usbtest).
 #
 # Bind Gadget Zero on the device side over the dummy_hcd loop and exercise it

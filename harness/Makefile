@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # USB test harness orchestration.
 #
 # Most targets need root (module load, usbfs/configfs/raw-gadget, usbmon).

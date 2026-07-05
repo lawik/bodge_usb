@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Install a matching Erlang/Elixir toolchain in the guest via mise, so the
 # bodge_usb library can be built and run against the harness inside
 # the VM. Runs IN the guest. Idempotent. The OTP build is from source (~10-15

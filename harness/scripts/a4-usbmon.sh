@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # A4 -- Observability (usbmon).
 #
 # Attach/detach a usbmon capture around a test run. usbmon exposes a text

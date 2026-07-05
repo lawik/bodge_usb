@@ -1,8 +1,13 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 name: ci
 
-# Build the NIF and run the host-safe (non-device) test suite on every push/PR.
-# Device-backed tests are tagged and excluded by default (test_helper.exs); those
-# run privileged in the usb-harness workflow / the in-VM verify flow.
+# Build the NIF and run the host-safe (non-device) test suite on every push/PR,
+# across the supported version corners. Device-backed tests are tagged and
+# excluded by default (test_helper.exs); those run privileged in the
+# usb-harness workflow / the in-VM verify flow.
 
 on:
   push:
@@ -14,13 +19,24 @@ permissions:
 jobs:
   host-tests:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported pair (mix.exs floor) and current.
+          - otp: "26"
+            elixir: "1.17"
+            lint: false
+          - otp: "29"
+            elixir: "1.20"
+            lint: true
     steps:
       - uses: actions/checkout@v4
 
       - uses: erlef/setup-beam@v1
         with:
-          otp-version: "29"
-          elixir-version: "1.20"
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
 
       - name: Restore deps + build cache
         uses: actions/cache@v4
@@ -28,14 +44,23 @@ jobs:
           path: |
             deps
             _build
-          key: ${{ runner.os }}-mix-${{ hashFiles('mix.lock') }}
-          restore-keys: ${{ runner.os }}-mix-
+          key: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('mix.lock') }}
+          restore-keys: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-
 
       - run: mix deps.get
       - run: mix compile --warnings-as-errors
-      - run: mix format --check-formatted
-      - run: mix credo --strict
       - run: mix test
+      - if: ${{ matrix.lint }}
+        run: mix format --check-formatted
+      - if: ${{ matrix.lint }}
+        run: mix credo --strict
       # PLTs land in _build, which the cache step above already covers: the
       # first run pays the PLT build, later runs take seconds.
-      - run: mix dialyzer
+      - if: ${{ matrix.lint }}
+        run: mix dialyzer
+
+  reuse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: fsfe/reuse-action@v5

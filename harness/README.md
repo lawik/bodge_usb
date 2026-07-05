@@ -65,7 +65,7 @@ harness/vm/vm.sh down        # power off
 ```
 
 VM state (image, disk overlay, ssh key) lives in
-`~/.local/share/circuits-usb-vm/`, outside the repo. Needs `qemu-system-x86_64`,
+`~/.local/share/bodge-usb-vm/`, outside the repo. Needs `qemu-system-x86_64`,
 `genisoimage`, and access to `/dev/kvm`. Developed against Ubuntu 24.04 /
 kernel 6.8.
 

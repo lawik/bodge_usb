@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 defmodule BodgeUSB.Descriptor do
   @moduledoc """
   USB descriptor parsing.
@@ -211,7 +215,7 @@ defmodule BodgeUSB.Descriptor do
   @spec decode_string(binary()) :: {:ok, String.t()} | {:error, :invalid_string}
   def decode_string(<<b_length, @dt_string, rest::binary>>) when b_length >= 2 do
     take = min(b_length - 2, byte_size(rest))
-    <<utf16::binary-size(^take), _::binary>> = rest
+    utf16 = binary_part(rest, 0, take)
 
     case :unicode.characters_to_binary(utf16, {:utf16, :little}) do
       s when is_binary(s) -> {:ok, s}
@@ -241,7 +245,8 @@ defmodule BodgeUSB.Descriptor do
         {:error, :truncated}
 
       true ->
-        <<chunk::binary-size(^b_length), tail::binary>> = bin
+        chunk = binary_part(bin, 0, b_length)
+        tail = binary_part(bin, b_length, byte_size(bin) - b_length)
         walk(tail, [%{type: b_type, length: b_length, data: chunk} | acc])
     end
   end

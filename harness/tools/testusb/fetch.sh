@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Fetch upstream tools/usb/testusb.c matching the running kernel's major.minor.
 # Override with TESTUSB_REF; drop your own testusb.c here to skip the fetch.
 set -euo pipefail

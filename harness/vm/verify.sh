@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Runs IN the guest, as root. End-to-end library verification against real usbfs:
 #   1. build + host-safe tests of the bodge_usb mix project (guest toolchain)
 #   2. bring up a real usbfs node (dummy_hcd + g_zero)
@@ -161,10 +165,43 @@ run_a3_phase bad-device-blength usbfs_a3_blength
 echo "== :usbfs_a3_slow (live raw-gadget slow) =="
 run_a3_phase slow usbfs_a3_slow
 
-# Device-side (:usbfs_gadget / :usbfs_ffs) tests moved to the bodge_usb_gadget
-# library, which drives them with bodge_usb as its host end. Run them from that
-# repo inside this VM (copy it to guest-local storage like $PROJ above), with
-# libcomposite + usb_f_hid / usb_f_fs loaded.
+# Device-side (:usbfs_gadget / :usbfs_ffs) tests live in the bodge_usb_gadget
+# library, which drives them with bodge_usb as its host end. When the sibling
+# checkout was shared into the guest (vm.sh mounts it at /mnt/gadget), build it
+# guest-local next to $PROJ (its ../bodge_usb path dep then resolves) and run
+# its suites here, where dummy_udc.0 is available.
+GSRC=/mnt/gadget
+GPROJ="$(dirname "$PROJ")/bodge_usb_gadget"
+if mountpoint -q "$GSRC" 2>/dev/null; then
+  echo "== sync bodge_usb_gadget to guest-local =="
+  rm -rf "$GPROJ"
+  mkdir -p "$GPROJ"
+  for d in lib c_src test config; do [ -e "$GSRC/$d" ] && cp -a "$GSRC/$d" "$GPROJ/"; done
+  for f in mix.exs mix.lock Makefile .formatter.exs; do [ -e "$GSRC/$f" ] && cp -a "$GSRC/$f" "$GPROJ/"; done
+
+  cd "$GPROJ"
+  echo "== gadget: deps + compile + host-safe tests =="
+  run_mix mix deps.get
+  run_mix mix compile
+  run_mix mix test
+
+  echo "== :usbfs_gadget tests (library-defined configfs gadget) =="
+  teardown_configfs_gadgets
+  rmmod g_zero 2>/dev/null || true
+  modprobe libcomposite usb_f_hid
+  run_mix mix test --only usbfs_gadget
+  teardown_configfs_gadgets
+
+  echo "== :usbfs_ffs tests (FunctionFS custom function) =="
+  teardown_configfs_gadgets
+  modprobe libcomposite usb_f_fs
+  run_mix mix test --only usbfs_ffs
+  umount /dev/ffs-bodge 2>/dev/null || true
+  teardown_configfs_gadgets
+  cd "$PROJ"
+else
+  echo "== bodge_usb_gadget not shared into the guest; skipping gadget/ffs phases =="
+fi
 
 # Phase C -- interrupt transfers need an interrupt endpoint; g_zero has
 # none, so switch to a configfs HID gadget (interrupt IN + OUT). The gadget

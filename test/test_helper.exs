@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Device-backed tests are tagged and excluded by default so `mix test` runs the
 # host-safe suite anywhere. The harness (harness/vm/verify.sh) re-includes each
 # phase with `--only <tag>` against the appropriate gadget:

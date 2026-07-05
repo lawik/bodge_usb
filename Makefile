@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Build the bodge_usb NIF. Invoked by elixir_make during `mix compile`.
 #
 # elixir_make provides MIX_APP_PATH, ERTS_INCLUDE_DIR and ERL_EI_INCLUDE_DIR.

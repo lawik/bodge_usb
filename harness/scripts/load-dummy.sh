@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Build (if needed) and load dummy_hcd, then print the host-side bus number
 # of the emulated controller on stdout. Idempotent: a no-op if already loaded.
 #

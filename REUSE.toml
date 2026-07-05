@@ -1,0 +1,12 @@
+version = 1
+
+[[annotations]]
+path = [
+    "**/*.md",
+    "mix.lock",
+    ".gitignore",
+    ".cspell.json",
+]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2026 Lars Wikman"
+SPDX-License-Identifier = "Apache-2.0"

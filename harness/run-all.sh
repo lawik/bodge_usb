@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Run the full harness end to end: A1 -> A2 -> A3 -> A4.
 # One command, headless, privileged. Aggregates per-case results and exits
 # non-zero if any case failed. Artifacts land in harness/artifacts/.

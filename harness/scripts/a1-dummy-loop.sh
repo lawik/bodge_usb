@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: 2026 Lars Wikman
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # A1 -- Virtual USB loop (dummy_hcd).
 #
 # Load dummy_hcd, bring up a stock CDC-ACM gadget via configfs/libcomposite

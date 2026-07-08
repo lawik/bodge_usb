@@ -5,10 +5,12 @@
 defmodule BodgeUSB.MixProject do
   use Mix.Project
 
+  @version "0.1.1"
+
   def project do
     [
       app: :bodge_usb,
-      version: "0.1.0",
+      version: @version,
       elixir: "~> 1.17",
       start_permanent: Mix.env() == :prod,
       elixirc_paths: elixirc_paths(Mix.env()),
@@ -38,7 +40,7 @@ defmodule BodgeUSB.MixProject do
     [
       main: "readme",
       source_url: "https://github.com/lawik/bodge_usb",
-      source_ref: "main",
+      source_ref: "v#{@version}",
       extras: ["README.md", "CHANGELOG.md"]
     ]
   end
@@ -104,7 +106,7 @@ defmodule BodgeUSB.MixProject do
   defp deps do
     [
       {:elixir_make, "~> 0.8", runtime: false},
-      {:nstandard, "~> 0.5", runtime: false},
+      {:nstandard, "~> 0.5", only: [:dev, :test], runtime: false},
       {:ex_doc, "~> 0.40", only: [:dev, :test], runtime: false},
       {:dialyxir, "~> 1.4", only: [:dev, :test], runtime: false},
       {:credo, "~> 1.7", only: [:dev, :test], runtime: false},

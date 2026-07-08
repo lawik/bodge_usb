@@ -1,5 +1,10 @@
 # Changelog
 
+## v0.1.1
+
+- Scope `nstandard` to the `:dev` and `:test` environments so it is not
+  pulled in as a dependency of the released package.
+
 ## v0.1.0
 
 Initial release. Host-side USB for Elixir on Linux over a usbfs-scoped
